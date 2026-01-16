@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Midnight Pro Terminal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="login-container">
+        <div class="card">
+
+            <div class="logo-box">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M18 20V4M6 20V4M12 20V12" stroke="#36d7b7" stroke-width="3" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h1>Midnight Pro</h1>
+            <p class="subtitle">Professional Trading Environment</p>
+
+            <div class="input-group">
+                <label for="mobile">Mobile Number</label>
+                <input type="text" id="mobile" placeholder="Enter your mobile number">
+            </div>
+
+            <div class="input-group">
+                <label for="password">Password</label>
+                <div class="password-wrapper">
+                    <input type="password" id="password" placeholder="••••••••••••">
+                    <span class="eye-icon">👁</span>
+                </div>
+            </div>
+
+            <div class="extras">
+                <label class="custom-checkbox">
+                    <input type="checkbox" id="rememberMe">
+                    <span class="checkmark"></span>
+                    <span class="label-text">Remember device</span>
+                </label>
+                <a href="#" class="forgot-pass">Forgot password?</a>
+            </div>
+
+            <button id="loginBtn" onclick="attemptLogin()">
+                🔒 <span id="btnText" style="margin-left: 8px;">Secure Login</span>
+            </button>
+
+            <p id="statusMsg"></p>
+
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

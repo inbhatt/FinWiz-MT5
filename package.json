@@ -1,0 +1,16 @@
+{
+  "name": "finwiz",
+  "version": "1.0.0",
+  "description": "",
+  "main": "frontend/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "electron": "^40.0.0"
+  }
+}

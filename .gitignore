@@ -1,0 +1,116 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# Python build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+*.egg
+
+# PyInstaller
+*.spec
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+.profile_default/
+ipython_config.py
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# =========================
+# Electron / Node.js
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+out/
+release/
+releases/
+dist_electron/
+electron_dist/
+build_electron/
+
+# Electron cache
+.cache/
+.eslintcache
+
+# =========================
+# Electron Forge / Builder
+# =========================
+*.dmg
+*.exe
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.msi
+
+# =========================
+# macOS / Windows / Linux
+# =========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Windows shortcuts
+*.lnk
+
+# =========================
+# IDEs (VS Code / JetBrains)
+# =========================
+.vscode/
+.idea/
+*.iml
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.swo
+*.tmp
+
+# =========================
+# SQLite / local DB (common in python apps)
+# =========================
+*.sqlite3
+*.db
+
+# =========================
+# Electron + Python bundling common folders
+# =========================
+backend/dist/
+backend/build/
+frontend/dist/
+frontend/out/
