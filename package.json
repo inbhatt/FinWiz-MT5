@@ -4,7 +4,8 @@
   "description": "",
   "main": "frontend/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "package": "electron-packager . FinWiz --platform=win32 --arch=x64 --out=dist --icon=frontend/icon.ico --overwrite --extra-resource=finwiz-server.exe"
   },
   "keywords": [],
   "author": "",
@@ -12,5 +13,8 @@
   "type": "commonjs",
   "dependencies": {
     "electron": "^40.0.0"
+  },
+  "devDependencies": {
+    "electron-packager": "^17.1.2"
   }
 }

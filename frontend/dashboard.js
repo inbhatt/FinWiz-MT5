@@ -29,7 +29,6 @@ const WATCHLIST = [
     { sym: 'GBPUSD', desc: 'Great Britain Pound' },
     { sym: 'USDJPY', desc: 'US Dollar vs Yen' },
     { sym: 'US30',   desc: 'Dow Jones 30' },
-    { sym: 'NAS100', desc: 'Nasdaq 100' }
 ];
 
 // --- INITIALIZATION ---
@@ -337,14 +336,16 @@ function cancelDrag() {
 // ==================================================
 
 function updateChartPositions(positions) {
-    // 1. Filter positions for CURRENT symbol only
+    // 1. Filter for Current Symbol
     const currentPositions = positions.filter(p => p.symbol === currentSymbol);
+
+    // Note: p.ticket is now a STRING (e.g. "BTCUSD_BUY")
     const activeTickets = new Set(currentPositions.map(p => p.ticket));
 
-    // 2. Cleanup: Remove lines for closed trades or trades from OTHER symbols
+    // 2. Cleanup (Use string keys)
     for (let t in priceLines) {
-        // If ticket is not in the active list for this symbol, remove it
-        if (!activeTickets.has(parseInt(t))) {
+        // Remove parseInt here! Compare string directly.
+        if (!activeTickets.has(t)) {
             const group = priceLines[t];
             if(group.main) candleSeries.removePriceLine(group.main);
             if(group.tp) candleSeries.removePriceLine(group.tp);
@@ -353,14 +354,15 @@ function updateChartPositions(positions) {
         }
     }
 
-    // 3. Draw/Update Active Trades
+    // 3. Draw/Update
     currentPositions.forEach(pos => {
         const mainColor = pos.type === 'BUY' ? COL_BUY : COL_SELL;
-        const mainTitle = `${pos.type} ${pos.volume} ($${pos.profit.toFixed(2)})`;
 
-        // --- ENTRY LINE ---
+        // Show "Avg Price" in the label
+        const mainTitle = `${pos.type} ${pos.volume} [Avg] ($${pos.profit.toFixed(2)})`;
+
+        // ENTRY LINE
         if (!priceLines[pos.ticket]) {
-            // CREATE NEW (Only if it doesn't exist)
             const mainLine = candleSeries.createPriceLine({
                 price: pos.price_open, color: mainColor, lineWidth: 2,
                 lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true,
@@ -368,51 +370,36 @@ function updateChartPositions(positions) {
             });
             priceLines[pos.ticket] = { main: mainLine, tp: null, sl: null, data: pos };
         } else {
-            // UPDATE EXISTING
             const group = priceLines[pos.ticket];
-            group.main.applyOptions({ title: mainTitle });
-            group.data = pos; // Update data ref
+            group.main.applyOptions({ price: pos.price_open, title: mainTitle });
+            group.data = pos;
         }
 
         const group = priceLines[pos.ticket];
 
-        // --- TP LINE ---
+        // TP LINE
         if (pos.tp > 0) {
             const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.tp);
             const title = `TP: +$${pl}`;
-
             if (!group.tp) {
                 group.tp = candleSeries.createPriceLine({
                     price: pos.tp, color: COL_TP, lineWidth: 1,
-                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
-                    title: title,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: title,
                 });
-            } else {
-                group.tp.applyOptions({ price: pos.tp, title: title });
-            }
-        } else if (group.tp) {
-            candleSeries.removePriceLine(group.tp);
-            group.tp = null;
-        }
+            } else { group.tp.applyOptions({ price: pos.tp, title: title }); }
+        } else if (group.tp) { candleSeries.removePriceLine(group.tp); group.tp = null; }
 
-        // --- SL LINE ---
+        // SL LINE
         if (pos.sl > 0) {
             const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.sl);
             const title = `SL: $${pl}`;
-
             if (!group.sl) {
                 group.sl = candleSeries.createPriceLine({
                     price: pos.sl, color: COL_SL, lineWidth: 1,
-                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
-                    title: title,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: title,
                 });
-            } else {
-                group.sl.applyOptions({ price: pos.sl, title: title });
-            }
-        } else if (group.sl) {
-            candleSeries.removePriceLine(group.sl);
-            group.sl = null;
-        }
+            } else { group.sl.applyOptions({ price: pos.sl, title: title }); }
+        } else if (group.sl) { candleSeries.removePriceLine(group.sl); group.sl = null; }
     });
 }
 
@@ -425,31 +412,33 @@ function renderPositions(positions) {
         const profitClass = pos.profit >= 0 ? 'text-green' : 'text-red';
         const badgeClass = pos.type === 'BUY' ? 'badge-buy' : 'badge-sell';
 
-        // --- SL CELL CONTENT (Updated Font) ---
+        // --- SL CELL CONTENT ---
         let slHtml = '<span style="color:#8a94a6;">-</span>';
         if(pos.sl > 0) {
             const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.sl);
+            // NOTICE THE QUOTES AROUND ${pos.ticket} below:
             slHtml = `
                 <div style="display:flex; align-items:center; gap:5px;">
                     <div style="display:flex; flex-direction:column; line-height:1.2;">
                         <span style="color:${COL_SL}; font-weight:700;">${pos.sl.toFixed(2)}</span>
                         <span style="font-size:14px; font-weight:700; color:#ff5555;">${pl}</span>
                     </div>
-                    <button class="btn-remove-level" onclick="cancelLevel(${pos.ticket}, 'SL')">×</button>
+                    <button class="btn-remove-level" onclick="cancelLevel('${pos.ticket}', 'SL')">×</button>
                 </div>`;
         }
 
-        // --- TP CELL CONTENT (Updated Font) ---
+        // --- TP CELL CONTENT ---
         let tpHtml = '<span style="color:#8a94a6;">-</span>';
         if(pos.tp > 0) {
             const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.tp);
+            // NOTICE THE QUOTES AROUND ${pos.ticket} below:
             tpHtml = `
                 <div style="display:flex; align-items:center; gap:5px;">
                     <div style="display:flex; flex-direction:column; line-height:1.2;">
                         <span style="color:${COL_TP}; font-weight:700;">${pos.tp.toFixed(2)}</span>
                         <span style="font-size:14px; font-weight:700; color:#00b894;">+${pl}</span>
                     </div>
-                    <button class="btn-remove-level" onclick="cancelLevel(${pos.ticket}, 'TP')">×</button>
+                    <button class="btn-remove-level" onclick="cancelLevel('${pos.ticket}', 'TP')">×</button>
                 </div>`;
         }
 
@@ -472,7 +461,7 @@ function renderPositions(positions) {
                 <td class="${profitClass}">$${pos.profit.toFixed(2)}</td>
 
                 <td>
-                    <button class="btn-close-trade" onclick="closeTrade(${pos.ticket})">Close</button>
+                    <button class="btn-close-trade" onclick="closeTrade('${pos.ticket}')">Close</button>
                 </td>
             </tr>`;
     });
@@ -507,14 +496,14 @@ function renderHistory(history) {
 function showHoverMenu(target, x, y) {
     const menu = document.getElementById('hover-menu');
     const container = document.getElementById('chart-container');
-    const ticket = target.ticket;
+    const ticket = target.ticket; // This is a string now (e.g. "BTCUSD_BUY")
     const pos = priceLines[ticket].data;
 
     let html = '';
     const styleBlue = `color:${COL_BUY}; border-color:${COL_BUY}; background:rgba(41, 98, 255, 0.15)`;
     const styleRed  = `color:${COL_SELL}; border-color:${COL_SELL}; background:rgba(255, 85, 85, 0.15)`;
 
-    // Helper to generate P/L HTML
+    // --- Helper for P/L HTML ---
     const getPlHtml = (targetPrice) => {
         if (!targetPrice) return '';
         const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, targetPrice);
@@ -522,43 +511,36 @@ function showHoverMenu(target, x, y) {
         return `<span class="pl-preview ${colorClass}">${pl >= 0 ? '+' : ''}$${pl}</span>`;
     };
 
+    // --- NOTICE QUOTES ADDED TO ALL startDrag AND cancelLevel CALLS ---
+
     if (target.type === 'MAIN') {
         const labelStyle = pos.type === 'BUY' ? styleBlue : styleRed;
         html += `<span style="font-size:12px; margin-right:8px; font-weight:700; border:1px solid; padding:4px 8px; border-radius:4px; ${labelStyle}">#${ticket}</span>`;
 
         if (!pos.tp || pos.tp <= 0) {
-            html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'TP', ${pos.price_current})">+ TP</button>`;
+            html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
         }
         if (!pos.sl || pos.sl <= 0) {
-            html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'SL', ${pos.price_current})">+ SL</button>`;
+            html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
         }
     }
     else if (target.type === 'TP') {
-        html += `<span style="color:${COL_TP}; font-size:13px; font-weight:700;">TP</span>`;
-
-        // --- SHOW P/L PREVIEW ---
+        html += `<span style="color:${COL_TP}; font-weight:800; font-size:15px;">TP</span>`;
         html += getPlHtml(pos.tp);
-
-        html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'TP', ${pos.tp})">Move</button>`;
-        // Bigger Remove Button
-        html += `<button class="btn-remove-level" onclick="cancelLevel(${ticket}, 'TP')" title="Remove TP">×</button>`;
+        html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.tp})">Move</button>`;
+        html += `<button class="btn-remove-level" onclick="cancelLevel('${ticket}', 'TP')" title="Remove TP">×</button>`;
     }
     else if (target.type === 'SL') {
-        html += `<span style="color:${COL_SL}; font-size:13px; font-weight:700;">SL</span>`;
-
-        // --- SHOW P/L PREVIEW ---
+        html += `<span style="color:${COL_SL}; font-weight:800; font-size:15px;">SL</span>`;
         html += getPlHtml(pos.sl);
-
-        html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'SL', ${pos.sl})">Move</button>`;
-        // Bigger Remove Button
-        html += `<button class="btn-remove-level" onclick="cancelLevel(${ticket}, 'SL')" title="Remove SL">×</button>`;
+        html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.sl})">Move</button>`;
+        html += `<button class="btn-remove-level" onclick="cancelLevel('${ticket}', 'SL')" title="Remove SL">×</button>`;
     }
 
     menu.innerHTML = html;
     menu.style.display = 'flex';
     menu.style.alignItems = 'center';
 
-    // Positioning (Fixed Right)
     const containerWidth = container.clientWidth;
     const menuWidth = menu.offsetWidth;
     const axisWidth = 60;

@@ -4,6 +4,8 @@ import MetaTrader5 as mt5
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta
+import sys
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -12,8 +14,20 @@ CORS(app)
 MT5_PATH = "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
 
 # --- FIREBASE SETUP ---
+
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 if not firebase_admin._apps:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    cred_path = get_resource_path("serviceAccountKey.json")
+    cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -92,64 +106,111 @@ def login():
     return jsonify({"status": "success", "message": "Login Authorized"})
 
 
+def get_aggregated_positions(mobile):
+    # Get ALL open positions
+    raw_positions = mt5.positions_get()
+    if raw_positions is None: return []
+
+    agg_map = {}  # Key: "SYMBOL_TYPE" (e.g. "BTCUSD_0")
+
+    for pos in raw_positions:
+        key = f"{pos.symbol}_{pos.type}"  # 0=Buy, 1=Sell
+
+        if key not in agg_map:
+            agg_map[key] = {
+                "symbol": pos.symbol,
+                "type_int": pos.type,
+                "type": "BUY" if pos.type == 0 else "SELL",
+                "tickets": [],  # List of all real MT5 tickets
+                "volume": 0.0,
+                "weighted_price_sum": 0.0,
+                "profit": 0.0,
+                "sl": pos.sl,  # Inherit from first found
+                "tp": pos.tp,  # Inherit from first found
+                "price_current": pos.price_current
+            }
+
+        # Accumulate Data
+        data = agg_map[key]
+        data["tickets"].append(pos.ticket)
+        data["volume"] += pos.volume
+        data["weighted_price_sum"] += (pos.price_open * pos.volume)
+        data["profit"] += pos.profit + pos.swap  # Include swap in P/L
+
+        # Sync Current Price (Always fresh)
+        data["price_current"] = pos.price_current
+
+    # Finalize Averages
+    results = []
+    for key, data in agg_map.items():
+        avg_price = data["weighted_price_sum"] / data["volume"]
+
+        # Create a "Virtual Ticket" string to identify this group
+        # Format: "BTCUSD_BUY"
+        virtual_ticket = f"{data['symbol']}_{data['type']}"
+
+        results.append({
+            "ticket": virtual_ticket,  # <--- STRING ID NOW
+            "real_tickets": data["tickets"],  # Keep real IDs for backend use
+            "symbol": data["symbol"],
+            "type": data["type"],
+            "volume": round(data["volume"], 2),
+            "price_open": round(avg_price, 5),
+            "price_current": data["price_current"],
+            "sl": data["sl"],
+            "tp": data["tp"],
+            "profit": round(data["profit"], 2)
+        })
+
+    return results
+
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard_data():
     mobile = request.args.get('mobile')
-    if not mobile: return jsonify({"error": "Mobile required"}), 400
-
-    # Uses cached credentials now (Fast)
     success, msg = connect_to_mt5(mobile)
     if not success: return jsonify({"error": msg}), 400
 
-    try:
-        info = mt5.account_info()
-        if not info: return jsonify({"error": "Failed to fetch info"}), 500
+    account_info = mt5.account_info()
+    if not account_info: return jsonify({"error": "Account Info Failed"}), 500
 
-        # Positions
-        positions = mt5.positions_get()
-        pos_data = []
-        if positions:
-            for pos in positions:
-                pos_data.append({
-                    "ticket": pos.ticket,
-                    "symbol": pos.symbol,
-                    "type": "BUY" if pos.type == 0 else "SELL",
-                    "volume": pos.volume,
-                    "price_open": pos.price_open,
-                    "price_current": pos.price_current,
-                    "profit": pos.profit,
-                    "sl": pos.sl,
-                    "tp": pos.tp
+    # 1. Get Open Positions (Aggregated)
+    positions = get_aggregated_positions(mobile)
+
+    # 2. Get History (Corrected Logic)
+    history = []
+    from_date = datetime.now() - timedelta(days=30)
+    raw_history = mt5.history_deals_get(from_date, datetime.now())
+
+    if raw_history:
+        for deal in raw_history:
+            # We only care about exit deals (closing trades)
+            if deal.entry == mt5.DEAL_ENTRY_OUT:
+                # --- FIX: INVERT THE TYPE ---
+                # Closing a BUY requires a SELL deal (Type 1)
+                # Closing a SELL requires a BUY deal (Type 0)
+                # So if deal.type is 1 (Sell), original trade was BUY.
+                trade_type = "BUY" if deal.type == 1 else "SELL"
+
+                history.append({
+                    "time": datetime.fromtimestamp(deal.time).strftime('%Y-%m-%d %H:%M'),
+                    "symbol": deal.symbol,
+                    "type": trade_type,  # <--- Uses corrected type
+                    "volume": deal.volume,
+                    "price": deal.price,
+                    "profit": deal.profit
                 })
 
-        # History
-        from_date = datetime.now() - timedelta(days=30)
-        history = mt5.history_deals_get(from_date, datetime.now())
-        hist_data = []
-        if history:
-            for deal in history:
-                if deal.entry == 1:
-                    hist_data.append({
-                        "timestamp": int(deal.time),
-                        "time": datetime.fromtimestamp(deal.time).strftime('%Y-%m-%d %H:%M'),
-                        "symbol": deal.symbol,
-                        "type": "BUY" if deal.type == 0 else "SELL",
-                        "volume": deal.volume,
-                        "price": deal.price,
-                        "profit": deal.profit
-                    })
-            hist_data.sort(key=lambda x: x['timestamp'], reverse=True)
+    # Show newest first
+    history.reverse()
 
-        return jsonify({
-            "balance": info.balance,
-            "equity": info.equity,
-            "margin_free": info.margin_free,
-            "profit": info.profit,
-            "positions": pos_data,
-            "history": hist_data
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "balance": account_info.balance,
+        "equity": account_info.equity,
+        "margin_free": account_info.margin_free,
+        "profit": account_info.profit,
+        "positions": positions,
+        "history": history
+    })
 
 
 # ... inside backend/app.py ...
@@ -242,94 +303,117 @@ def get_filling_mode(symbol):
 
 @app.route('/api/trade', methods=['POST'])
 def place_trade():
-    data = request.json
-    mobile = data.get('mobile')
-    symbol = data.get('symbol', 'BTCUSDT')  # Default to what you are using
-    action_type = data.get('type')
-    volume = float(data.get('volume', 0.01))
+    try:
+        data = request.json
+        mobile = data.get('mobile')
+        symbol = data.get('symbol')
+        action_type = data.get('type')  # 'BUY' or 'SELL'
+        volume = float(data.get('volume'))
 
-    success, msg = connect_to_mt5(mobile)
-    if not success: return jsonify({"error": msg}), 400
+        connect_to_mt5(mobile)
 
-    # 1. Check Algo Trading
-    if not mt5.terminal_info().trade_allowed:
-        return jsonify({"error": "Algo Trading is OFF. Enable it in MT5 Terminal."}), 403
+        # --- 1. CHECK EXISTING POSITIONS (Blocking & Syncing) ---
+        positions = mt5.positions_get(symbol=symbol)
 
-    # 2. Select Symbol & Get Price
-    if not mt5.symbol_select(symbol, True):
-        return jsonify({"error": f"Symbol {symbol} not found"}), 404
+        target_sl = 0.0
+        target_tp = 0.0
 
-    tick = mt5.symbol_info_tick(symbol)
-    if not tick: return jsonify({"error": "Market Closed"}), 400
+        if positions:
+            for pos in positions:
+                existing_type = "BUY" if pos.type == 0 else "SELL"
 
-    price = tick.ask if action_type == 'BUY' else tick.bid
-    order_type = mt5.ORDER_TYPE_BUY if action_type == 'BUY' else mt5.ORDER_TYPE_SELL
+                # BLOCKING LOGIC: If opposite type exists, DENY.
+                if existing_type != action_type:
+                    return jsonify({
+                                       "error": f"Cannot {action_type}. Close existing {existing_type} positions on {symbol} first."}), 400
 
-    # 3. GET CORRECT FILLING MODE (The Fix)
-    fill_mode = get_filling_mode(symbol)
+                # INHERIT LOGIC: Grab SL/TP from existing trade
+                # We simply take the first one we find
+                if pos.sl > 0: target_sl = pos.sl
+                if pos.tp > 0: target_tp = pos.tp
 
-    request_data = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": volume,
-        "type": order_type,
-        "price": price,
-        "deviation": 20,
-        "magic": 234000,
-        "comment": "Midnight Pro Web",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": fill_mode,  # <--- Updated here
-    }
+        # --- 2. PREPARE ORDER ---
+        tick = mt5.symbol_info_tick(symbol)
+        price = tick.ask if action_type == 'BUY' else tick.bid
+        order_type = mt5.ORDER_TYPE_BUY if action_type == 'BUY' else mt5.ORDER_TYPE_SELL
 
-    result = mt5.order_send(request_data)
+        request_data = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": price,
+            "sl": target_sl,  # <--- Auto-Inherited
+            "tp": target_tp,  # <--- Auto-Inherited
+            "deviation": 20,
+            "magic": 234000,
+            "comment": "FinWiz",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_FOK,  # Using FOK as safe default
+        }
 
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        # Debugging: Print exactly what failed to Python console
-        print(f"Trade Failed: {result.comment}, RetCode: {result.retcode}")
-        return jsonify({"error": f"Order Failed: {result.comment} ({result.retcode})"}), 400
+        result = mt5.order_send(request_data)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return jsonify({"error": f"Order Failed: {result.comment}"}), 400
 
-    return jsonify({"message": "Order Placed", "ticket": result.order})
+        return jsonify({"message": "Order Placed", "ticket": result.order})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/modify', methods=['POST'])
 def modify_trade():
-    data = request.json
-    mobile = data.get('mobile')
     try:
-        ticket = int(data.get('ticket'))
-    except:
-        return jsonify({"error": "Invalid Ticket"}), 400
+        data = request.json
+        mobile = data.get('mobile')
+        # ticket is now "BTCUSD_BUY"
+        virtual_ticket = data.get('ticket')
 
-    success, msg = connect_to_mt5(mobile)
-    if not success: return jsonify({"error": msg}), 400
+        # Parse Symbol and Type from Virtual ID
+        # Format: "SYMBOL_TYPE" (e.g. "BTCUSD_BUY")
+        parts = virtual_ticket.split('_')
+        symbol = parts[0]
+        p_type_str = parts[1]
+        p_type_int = 0 if p_type_str == 'BUY' else 1
 
-    # 1. FETCH CURRENT POSITION (Crucial Step)
-    # We need to see what the current SL/TP is so we don't accidentally delete it.
-    positions = mt5.positions_get(ticket=ticket)
-    if not positions:
-        return jsonify({"error": "Position not found or already closed"}), 404
+        connect_to_mt5(mobile)
 
-    current_pos = positions[0]
+        # 1. Get ALL real tickets for this symbol & type
+        all_positions = mt5.positions_get(symbol=symbol)
+        target_positions = [p for p in all_positions if p.type == p_type_int]
 
-    # 2. MERGE NEW VALUES WITH OLD VALUES
-    # If 'sl' is in data, use it. Otherwise, keep the old SL.
-    # If 'tp' is in data, use it. Otherwise, keep the old TP.
+        if not target_positions:
+            return jsonify({"error": "No positions found to update"}), 404
 
-    new_sl = float(data['sl']) if 'sl' in data else current_pos.sl
-    new_tp = float(data['tp']) if 'tp' in data else current_pos.tp
+        # 2. Determine New SL/TP
+        # Use new value if provided, else keep existing from the FIRST position
+        # (Since we sync them, they should all be the same)
+        current_ref = target_positions[0]
 
-    request_data = {
-        "action": mt5.TRADE_ACTION_SLTP,
-        "position": ticket,
-        "sl": new_sl,
-        "tp": new_tp
-    }
+        new_sl = float(data['sl']) if 'sl' in data else current_ref.sl
+        new_tp = float(data['tp']) if 'tp' in data else current_ref.tp
 
-    result = mt5.order_send(request_data)
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        return jsonify({"error": f"Modify Failed: {result.comment}"}), 400
+        # 3. Loop and Update ALL
+        errors = []
+        for pos in target_positions:
+            req = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": pos.ticket,
+                "sl": new_sl,
+                "tp": new_tp
+            }
+            res = mt5.order_send(req)
+            if res.retcode != mt5.TRADE_RETCODE_DONE:
+                errors.append(f"{pos.ticket}: {res.comment}")
 
-    return jsonify({"message": "Position Updated", "sl": new_sl, "tp": new_tp})
+        if errors:
+            return jsonify({"error": f"Partial Failure: {', '.join(errors)}"}), 206
+
+        return jsonify({"message": "All Positions Updated"})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ... inside app.py ...
@@ -339,59 +423,46 @@ def close_trade():
     try:
         data = request.json
         mobile = data.get('mobile')
-        ticket = int(data.get('ticket'))
+        virtual_ticket = data.get('ticket')  # "BTCUSD_BUY"
 
-        success, msg = connect_to_mt5(mobile)
-        if not success: return jsonify({"error": msg}), 400
+        parts = virtual_ticket.split('_')
+        symbol = parts[0]
+        p_type_str = parts[1]
+        p_type_int = 0 if p_type_str == 'BUY' else 1
 
-        # 1. Select Position
-        positions = mt5.positions_get(ticket=ticket)
-        if not positions:
-            return jsonify({"error": "Position not found or already closed"}), 404
+        connect_to_mt5(mobile)
 
-        pos = positions[0]
+        # 1. Get positions
+        all_positions = mt5.positions_get(symbol=symbol)
+        target_positions = [p for p in all_positions if p.type == p_type_int]
 
-        # 2. Get Closing Price
-        symbol = pos.symbol
-        if not mt5.symbol_select(symbol, True):
-            return jsonify({"error": "Symbol select failed"}), 404
+        if not target_positions:
+            return jsonify({"error": "No positions found"}), 404
 
         tick = mt5.symbol_info_tick(symbol)
-        if not tick: return jsonify({"error": "Market Closed"}), 400
+        price = tick.bid if p_type_int == 0 else tick.ask
+        order_type = mt5.ORDER_TYPE_SELL if p_type_int == 0 else mt5.ORDER_TYPE_BUY
 
-        # Closing logic: Buy -> Sell, Sell -> Buy
-        price = tick.bid if pos.type == 0 else tick.ask
-        order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        # 2. Close ALL
+        for pos in target_positions:
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": pos.volume,
+                "type": order_type,
+                "position": pos.ticket,
+                "price": price,
+                "deviation": 20,
+                "magic": 234000,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_FOK,
+            }
+            mt5.order_send(req)
 
-        # 3. Filling Mode
-        fill_mode = get_filling_mode(symbol)
-
-        # 4. Send Close Order
-        request_data = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": pos.volume,
-            "type": order_type,
-            "position": ticket,
-            "price": price,
-            "deviation": 20,
-            "magic": 234000,
-            "comment": "Midnight Pro Close",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": fill_mode,
-        }
-
-        result = mt5.order_send(request_data)
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return jsonify({"error": f"Close Failed: {result.comment}"}), 400
-
-        # FIX: Removed 'result.profit' because it causes the 500 Crash
-        return jsonify({"message": "Trade Closed Successfully", "ticket": result.order})
+        return jsonify({"message": "Trades Closed"})
 
     except Exception as e:
-        print(f"CLOSE ERROR: {e}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
