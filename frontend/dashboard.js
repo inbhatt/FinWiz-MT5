@@ -1,19 +1,30 @@
 const { ipcRenderer } = require('electron');
 
 // --- GLOBAL STATE ---
-let currentMobile = localStorage.getItem("userMobile");
-let currentSymbol = 'XAUUSD'; // Default Symbol
+// Preserved localStorage logic
+let currentMobile = localStorage.getItem("userMobile") || "9876543210";
+let currentSymbol = 'XAUUSD';
 let chart, candleSeries;
-let priceLines = {}; // Stores chart lines: { ticket: { main, tp, sl, data } }
+let priceLines = {};
 let isErrorOpen = false;
 let currentTimeframe = '1H';
 let latestCandle = null;
-let draggingLine = null; // Stores drag state: { ticket, type, lineObj, direction }
+let draggingLine = null; // { ticket, type, startPrice, direction }
+let dragPriceLine = null;
+let activeHoverTicket = null;
+let dragStartTime = 0;
 
-// --- WATCHLIST CONFIGURATION ---
+// --- COLORS ---
+const COL_BUY  = '#2962ff'; // Blue
+const COL_SELL = '#ff5555'; // Red
+const COL_TP   = '#00b894'; // Green
+const COL_SL   = '#ff9f43'; // Orange
+const COL_TXT  = '#8a94a6';
+
+// --- WATCHLIST ---
 const WATCHLIST = [
     { sym: 'XAUUSD', desc: 'Gold vs US Dollar' },
-    { sym: 'BTCUSD', desc: 'Bitcoin vs Dollar' },
+    { sym: 'BTCUSDT', desc: 'Bitcoin vs Dollar' },
     { sym: 'EURUSD', desc: 'Euro vs US Dollar' },
     { sym: 'GBPUSD', desc: 'Great Britain Pound' },
     { sym: 'USDJPY', desc: 'US Dollar vs Yen' },
@@ -25,31 +36,29 @@ const WATCHLIST = [
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         if (!currentMobile) {
-            showError('Auth Error', 'No user logged in.');
-            setTimeout(() => window.location.href = 'index.html', 2000);
-            return;
+            // Optional: Redirect if strict auth needed
+            console.warn("No User Logged In");
         }
 
-        // 1. Setup UI
         renderWatchlist();
         initChart();
 
-        // 2. Initial Data Load
+        // Initial Load
         await fetchDashboardData();
-        await loadFullChartHistory(); // Load 2000 candles for default symbol
+        await loadFullChartHistory();
 
-        // 3. Start Data Loops
+        // Loops
         setInterval(fetchDashboardData, 2000);
-        setInterval(updateLiveCandle, 250);  // Poll price updates every 1s
+        setInterval(updateLiveCandle, 250);
 
-        // 4. Bind Timeframe Buttons
+        // Timeframe Buttons
         document.querySelectorAll('.chart-controls button').forEach(btn => {
             if(btn.classList.contains('btn-icon')) return;
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.chart-controls button').forEach(b => b.classList.remove('active'));
                 e.target.classList.add('active');
                 currentTimeframe = e.target.innerText;
-                loadFullChartHistory(); // Reload history on change
+                loadFullChartHistory();
             });
         });
 
@@ -58,57 +67,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
-// ==================================================
-// 1. WATCHLIST & SYMBOL LOGIC
-// ==================================================
-
-function renderWatchlist() {
-    const container = document.getElementById('watchlist-container');
-    container.innerHTML = '';
-
-    WATCHLIST.forEach(item => {
-        const div = document.createElement('div');
-        div.className = `watchlist-item ${item.sym === currentSymbol ? 'active' : ''}`;
-        div.onclick = () => changeSymbol(item.sym);
-        div.innerHTML = `
-            <div>
-                <div class="wl-symbol">${item.sym}</div>
-                <div class="wl-desc">${item.desc}</div>
-            </div>
-        `;
-        container.appendChild(div);
-    });
-}
-
-async function changeSymbol(newSym) {
-    if(currentSymbol === newSym) return;
-
-    // 1. Update State
-    currentSymbol = newSym;
-    document.getElementById('chart-symbol-name').innerText = currentSymbol;
-
-    // 2. Update Sidebar UI
-    renderWatchlist();
-
-    // 3. Clear Chart Data & Lines
-    candleSeries.setData([]);
-    latestCandle = null;
-    clearAllChartLines(); // Remove old trade lines
-
-    // 4. Reload Data
-    await loadFullChartHistory();
-    fetchDashboardData(); // Re-fetch trades to draw lines for new symbol
-}
 
 // ==================================================
-// 2. CHARTING ENGINE
+// 1. CHARTING ENGINE & INTERACTION
 // ==================================================
 
 function initChart() {
     const container = document.getElementById('chart-container');
     const legend = document.getElementById('chart-legend');
 
-    // Legend Styles (Already Big, keeping it)
     legend.style.fontSize = '16px';
     legend.style.top = '15px';
     legend.style.left = '15px';
@@ -119,7 +86,7 @@ function initChart() {
         layout: {
             background: { type: 'solid', color: '#151a30' },
             textColor: '#8a94a6',
-            fontSize: 16, // <--- INCREASED TO 16PX (Axis Labels)
+            fontSize: 16,
             fontFamily: 'Inter, sans-serif'
         },
         grid: {
@@ -128,26 +95,19 @@ function initChart() {
         },
         localization: {
             locale: 'en-IN',
-            // Update Crosshair Date Format as well
             timeFormatter: (timestamp) => formatDateTime(timestamp)
         },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         timeScale: {
-            timeVisible: true,
-            borderColor: 'rgba(255, 255, 255, 0.1)',
-            rightOffset: 20,
-            tickMarkFormatter: (time, tickMarkType, locale) => {
-                // Keep axis simple (Day/Month or Time) to prevent crowding
+            timeVisible: true, borderColor: 'rgba(255, 255, 255, 0.1)', rightOffset: 20,
+            tickMarkFormatter: (time, tickMarkType) => {
                 const date = new Date(time * 1000);
-                if (tickMarkType < 3) {
-                    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-                } else {
-                    return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
-                }
+                if (tickMarkType < 3) return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
             }
         }
     });
-    // ... (Rest of initChart remains the same: addSeries, listeners, resizeObserver) ...
+
     candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
         upColor: '#36d7b7', downColor: '#ff5555',
         borderVisible: false, wickUpColor: '#36d7b7', wickDownColor: '#ff5555',
@@ -157,13 +117,57 @@ function initChart() {
         if (param.time) {
             const data = param.seriesData.get(candleSeries);
             if(data) updateLegend(data);
+        } else if (latestCandle) updateLegend(latestCandle);
+    });
+
+    // --- INTERACTION LOGIC ---
+    const hoverMenu = document.getElementById('hover-menu');
+
+    // 1. MOUSE MOVE (Hover Menu + Drag Update)
+    container.addEventListener('mousemove', (e) => {
+        if (draggingLine) {
+            updateDrag(e);
+            hoverMenu.style.display = 'none';
+            return;
+        }
+
+        if (e.target.closest('.chart-hover-menu')) return;
+
+        const rect = container.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const x = e.clientX - rect.left;
+
+        let found = null;
+        for(let t in priceLines) {
+            const group = priceLines[t];
+            const checkLine = (linePrice, type) => {
+                const lineY = candleSeries.priceToCoordinate(linePrice);
+                if(lineY && Math.abs(y - lineY) < 15) return { type, ticket: t, y: lineY };
+                return null;
+            };
+            found = checkLine(group.data.price_open, 'MAIN') ||
+                    (group.tp ? checkLine(group.data.tp, 'TP') : null) ||
+                    (group.sl ? checkLine(group.data.sl, 'SL') : null);
+            if(found) break;
+        }
+
+        if(found) {
+            if (activeHoverTicket !== found.ticket + found.type || hoverMenu.style.display === 'none') {
+                showHoverMenu(found, x, found.y);
+                activeHoverTicket = found.ticket + found.type;
+            }
         } else {
-            if (latestCandle) updateLegend(latestCandle);
+            hoverMenu.style.display = 'none';
+            activeHoverTicket = null;
         }
     });
 
-    container.addEventListener('click', (e) => { if(draggingLine) commitDrag(e); });
-    container.addEventListener('mousemove', (e) => { if(draggingLine) updateDrag(e); });
+    // 2. MOUSE UP (Commit Drag)
+    document.addEventListener('mouseup', (e) => {
+        if (draggingLine) {
+            commitDrag(e);
+        }
+    });
 
     new ResizeObserver(entries => {
         if (entries.length === 0 || !entries[0].contentRect) return;
@@ -172,279 +176,245 @@ function initChart() {
     }).observe(container);
 }
 
-function formatDateTime(timestamp) {
-    if(!timestamp) return '';
-    // If timestamp is seconds (Unix), convert to MS. If it's a string, leave it.
-    // MT5 usually sends Unix seconds.
-    const d = new Date(typeof timestamp === 'number' ? timestamp * 1000 : timestamp);
+// --- DRAG LOGIC ---
 
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = String(d.getFullYear()).slice(-2); // Get last 2 digits
-    const hours = String(d.getHours()).padStart(2, '0');
-    const mins = String(d.getMinutes()).padStart(2, '0');
+function startDrag(ticket, type, currentPrice) {
+    const pos = priceLines[ticket].data; // Get full position data
 
-    return `${day}-${month}-${year} ${hours}:${mins}`;
+    draggingLine = {
+        ticket,
+        type,
+        startPrice: pos.price_open,
+        direction: pos.type,
+        volume: pos.volume,
+        symbol: pos.symbol
+    };
+
+    dragStartTime = Date.now();
+
+    const color = type === 'TP' ? COL_TP : COL_SL;
+
+    dragPriceLine = candleSeries.createPriceLine({
+        price: currentPrice,
+        color: color,
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: `Set ${type}`, // Initial Title
+    });
+
+    document.body.style.cursor = 'ns-resize';
+    document.getElementById('hover-menu').style.display = 'none';
 }
 
-// 2. UPDATE ZOOM LOGIC (Fix "Too Zoomed Out")
-async function loadFullChartHistory() {
-    try {
-        const url = `http://127.0.0.1:5000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=2000`;
-        const response = await fetch(url);
-        const data = await response.json();
+function updateDrag(e) {
+    if(!draggingLine || !dragPriceLine) return;
 
-        if (data && data.length > 0) {
-            candleSeries.setData(data);
-            latestCandle = data[data.length - 1];
-            updateLegend(latestCandle);
+    const rect = document.getElementById('chart-container').getBoundingClientRect();
+    let price = candleSeries.coordinateToPrice(e.clientY - rect.top);
 
-            // --- ZOOM FIX: Show only last 100 candles ---
-            const totalCandles = data.length;
+    if(!price) return;
 
-            // "to" is slightly past the end to give whitespace on the right
-            // "from" is 100 candles back
-            chart.timeScale().setVisibleLogicalRange({
-                from: totalCandles - 100,
-                to: totalCandles + 5
-            });
+    // --- 1. ENFORCE CONSTRAINTS (Request #2) ---
+    const entry = draggingLine.startPrice;
+    const isBuy = draggingLine.direction === 'BUY';
+    const mode = draggingLine.type; // 'TP' or 'SL'
 
-            // Reset scale so the candles aren't flat
-            chart.priceScale('right').applyOptions({
-                autoScale: true,
-            });
+    if (isBuy) {
+        if (mode === 'TP') {
+            // Buy TP must be ABOVE entry
+            if (price < entry) price = entry;
+        } else {
+            // Buy SL must be BELOW entry
+            if (price > entry) price = entry;
         }
-    } catch (e) {
-        console.error("Chart history load failed", e);
-    }
-}
-
-
-function updateLegend(data) {
-    const legend = document.getElementById('chart-legend');
-    if (!data) return;
-    const color = data.close >= data.open ? '#36d7b7' : '#ff5555';
-    legend.innerHTML = `<span style="color:${color}">O ${data.open.toFixed(2)} H ${data.high.toFixed(2)} L ${data.low.toFixed(2)} C ${data.close.toFixed(2)}</span>`;
-}
-
-// ==================================================
-// 3. DATA FETCHING
-// ==================================================
-
-// LOAD HISTORY (2000 Candles)
-async function loadFullChartHistory() {
-    try {
-        const url = `http://127.0.0.1:5000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=2000`;
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data && data.length > 0) {
-            candleSeries.setData(data);
-            latestCandle = data[data.length - 1];
-            updateLegend(latestCandle);
-
-            // --- FIX 2: FORCE RESET SCALE ---
-            // 1. Reset Price Scale to Auto Mode (in case user scrolled)
-            chart.priceScale('right').applyOptions({
-                autoScale: true,
-            });
+    } else {
+        // SELL
+        if (mode === 'TP') {
+            // Sell TP must be BELOW entry
+            if (price > entry) price = entry;
+        } else {
+            // Sell SL must be ABOVE entry
+            if (price < entry) price = entry;
         }
-    } catch (e) {
-        console.error("Chart history load failed", e);
     }
+
+    // Apply the constrained price
+    dragPriceLine.applyOptions({ price: price });
+
+    // --- 2. CALCULATE P/L PREVIEW (Request #3 - Part A) ---
+    const plValue = calculatePL(
+        draggingLine.symbol,
+        draggingLine.direction,
+        draggingLine.volume,
+        entry,
+        price
+    );
+
+    const sign = plValue >= 0 ? '+' : '';
+    dragPriceLine.applyOptions({
+        title: `${mode}: ${sign}$${plValue}`
+    });
 }
 
-// LIVE UPDATE (2 Candles)
-async function updateLiveCandle() {
+async function commitDrag(e) {
+    if (!draggingLine) return;
+
+    const rect = document.getElementById('chart-container').getBoundingClientRect();
+    const finalPrice = candleSeries.coordinateToPrice(e.clientY - rect.top);
+
+    // Cancel if invalid
+    if (!finalPrice) { cancelDrag(); return; }
+
+    // Prepare API Payload
+    const payload = {
+        mobile: currentMobile,
+        ticket: draggingLine.ticket
+    };
+
+    if (draggingLine.type === 'TP') payload.tp = finalPrice;
+    if (draggingLine.type === 'SL') payload.sl = finalPrice;
+
     try {
-        // 1. Add timestamp to prevent caching
-        const url = `http://127.0.0.1:5000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=2&_=${Date.now()}`;
-
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data && data.length > 0) {
-            // 2. Get the VERY LATEST candle (The one currently moving)
-            const latest = data[data.length - 1];
-
-            // 3. Update Chart
-            candleSeries.update(latest);
-
-            // 4. Update Global State & Legend
-            latestCandle = latest;
-            updateLegend(latest);
-
-            // DEBUG: Uncomment this line to see the price in your browser console (F12)
-            // console.log("Live Update:", latest.close);
-        }
-    } catch (e) {
-        console.error("Live update failed", e);
-    }
-}
-
-// DASHBOARD STATS & TRADES
-async function fetchDashboardData() {
-    try {
-        const response = await fetch(`http://127.0.0.1:5000/api/dashboard?mobile=${currentMobile}`);
-        const data = await response.json();
-
-        if(data.error) throw new Error(data.error);
-
-        // Update Stats
-        document.getElementById('val-balance').innerText = `$${data.balance.toFixed(2)}`;
-        const plEl = document.getElementById('val-pl');
-        plEl.innerText = `$${data.profit.toFixed(2)}`;
-        plEl.className = data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
-        document.getElementById('val-power').innerText = `$${data.margin_free.toFixed(2)}`;
-
-        // Progress Bar
-        const usedMargin = data.balance - data.margin_free;
-        const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
-        const bar = document.querySelector('.progress-fill');
-        if(bar) bar.style.width = `${usagePct}%`;
-
-        // Tables & Lines
-        renderPositions(data.positions);
-        renderHistory(data.history);
-        updateChartPositions(data.positions);
-
-    } catch (e) { console.log(e); }
-}
-
-// ==================================================
-// 4. TRADING & INTERACTION
-// ==================================================
-
-// PLACE ORDER
-async function placeOrder(type) {
-    const qty = document.getElementById('trade-qty').value;
-    try {
-        const res = await fetch('http://127.0.0.1:5000/api/trade', {
+        const response = await fetch('http://127.0.0.1:5000/api/modify', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                mobile: currentMobile,
-                symbol: currentSymbol,
-                type: type,
-                volume: parseFloat(qty)
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
         });
+        const res = await response.json();
 
-        const data = await res.json();
-        if(data.error) throw new Error(data.error);
+        if (res.error) showError('Modify Failed', res.error);
+        else console.log("Modification Success");
 
-        fetchDashboardData(); // Refresh UI immediately
+    } catch (err) {
+        console.error(err);
+    }
+
+    cancelDrag();
+}
+
+async function cancelLevel(ticket, type) {
+    // payload: { ticket: 123, tp: 0 } OR { ticket: 123, sl: 0 }
+    const payload = {
+        mobile: currentMobile,
+        ticket: ticket
+    };
+
+    if (type === 'TP') payload.tp = 0.0;
+    if (type === 'SL') payload.sl = 0.0;
+
+    try {
+        const response = await fetch('http://127.0.0.1:5000/api/modify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const res = await response.json();
+
+        if (res.error) showError('Remove Failed', res.error);
+        else console.log(`${type} Removed`);
+
+        // Hide menu immediately
+        document.getElementById('hover-menu').style.display = 'none';
 
     } catch (e) {
-        showError('Order Failed', e.message);
+        showError('Network Error', e.message);
     }
 }
 
-// VISUALIZE TRADES ON CHART
-function updateChartPositions(positions) {
-    const activeTickets = new Set(positions.map(p => p.ticket));
+function cancelDrag() {
+    if (dragPriceLine) {
+        candleSeries.removePriceLine(dragPriceLine);
+        dragPriceLine = null;
+    }
+    draggingLine = null;
+    document.body.style.cursor = 'default';
+}
 
-    // 1. Clean up closed trades
+
+// ==================================================
+// 2. VISUALIZATION & TABLES
+// ==================================================
+
+function updateChartPositions(positions) {
+    // 1. Filter positions for CURRENT symbol only
+    const currentPositions = positions.filter(p => p.symbol === currentSymbol);
+    const activeTickets = new Set(currentPositions.map(p => p.ticket));
+
+    // 2. Cleanup: Remove lines for closed trades or trades from OTHER symbols
     for (let t in priceLines) {
+        // If ticket is not in the active list for this symbol, remove it
         if (!activeTickets.has(parseInt(t))) {
-            candleSeries.removePriceLine(priceLines[t].main);
+            const group = priceLines[t];
+            if(group.main) candleSeries.removePriceLine(group.main);
+            if(group.tp) candleSeries.removePriceLine(group.tp);
+            if(group.sl) candleSeries.removePriceLine(group.sl);
             delete priceLines[t];
         }
     }
 
-    // 2. Add new active trades (Only for Current Symbol)
-    positions.forEach(pos => {
-        // Only draw if it matches current symbol AND doesn't exist yet
-        if (pos.symbol === currentSymbol && !priceLines[pos.ticket]) {
-            const color = pos.type === 'BUY' ? '#36d7b7' : '#ff5555';
-            const line = candleSeries.createPriceLine({
-                price: pos.price_open,
-                color: color,
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                axisLabelVisible: true,
-                title: `${pos.type} ${pos.volume}`,
+    // 3. Draw/Update Active Trades
+    currentPositions.forEach(pos => {
+        const mainColor = pos.type === 'BUY' ? COL_BUY : COL_SELL;
+        const mainTitle = `${pos.type} ${pos.volume} ($${pos.profit.toFixed(2)})`;
+
+        // --- ENTRY LINE ---
+        if (!priceLines[pos.ticket]) {
+            // CREATE NEW (Only if it doesn't exist)
+            const mainLine = candleSeries.createPriceLine({
+                price: pos.price_open, color: mainColor, lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true,
+                title: mainTitle,
             });
-            priceLines[pos.ticket] = { main: line, data: pos };
+            priceLines[pos.ticket] = { main: mainLine, tp: null, sl: null, data: pos };
+        } else {
+            // UPDATE EXISTING
+            const group = priceLines[pos.ticket];
+            group.main.applyOptions({ title: mainTitle });
+            group.data = pos; // Update data ref
+        }
+
+        const group = priceLines[pos.ticket];
+
+        // --- TP LINE ---
+        if (pos.tp > 0) {
+            const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.tp);
+            const title = `TP: +$${pl}`;
+
+            if (!group.tp) {
+                group.tp = candleSeries.createPriceLine({
+                    price: pos.tp, color: COL_TP, lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
+                    title: title,
+                });
+            } else {
+                group.tp.applyOptions({ price: pos.tp, title: title });
+            }
+        } else if (group.tp) {
+            candleSeries.removePriceLine(group.tp);
+            group.tp = null;
+        }
+
+        // --- SL LINE ---
+        if (pos.sl > 0) {
+            const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.sl);
+            const title = `SL: $${pl}`;
+
+            if (!group.sl) {
+                group.sl = candleSeries.createPriceLine({
+                    price: pos.sl, color: COL_SL, lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
+                    title: title,
+                });
+            } else {
+                group.sl.applyOptions({ price: pos.sl, title: title });
+            }
+        } else if (group.sl) {
+            candleSeries.removePriceLine(group.sl);
+            group.sl = null;
         }
     });
 }
-
-function clearAllChartLines() {
-    for (let t in priceLines) {
-        candleSeries.removePriceLine(priceLines[t].main);
-    }
-    priceLines = {};
-}
-
-// DRAG & DROP TP/SL
-function startDrag(ticket, type, startPrice) {
-    if(draggingLine) return; // Prevent multiple drags
-
-    const color = type === 'TP' ? '#36d7b7' : '#ff5555';
-    const ghost = candleSeries.createPriceLine({
-        price: startPrice,
-        color: color,
-        lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: `Set ${type}`,
-    });
-
-    // Find direction to calc P/L preview
-    // We look in priceLines, but if symbol changed it might not be there.
-    // Fallback to 'BUY' if not found (just affects P/L calc sign)
-    const direction = priceLines[ticket] ? priceLines[ticket].data.type : 'BUY';
-
-    draggingLine = { ticket, type, lineObj: ghost, direction, startPrice };
-}
-
-function updateDrag(e) {
-    if(!draggingLine) return;
-
-    const price = candleSeries.coordinateToPrice(e.offsetY);
-    if(price) {
-        draggingLine.lineObj.applyOptions({ price: price });
-
-        // P/L Preview
-        const diff = draggingLine.direction === 'BUY' ? (price - draggingLine.startPrice) : (draggingLine.startPrice - price);
-        // Approx $ value (simplified)
-        const profit = (diff * 100).toFixed(2);
-        draggingLine.lineObj.applyOptions({ title: `${draggingLine.type} (Click to set)` });
-    }
-}
-
-async function commitDrag(e) {
-    if(!draggingLine) return;
-
-    const finalPrice = candleSeries.coordinateToPrice(e.offsetY);
-    if(!finalPrice) return;
-
-    const reqBody = {
-        mobile: currentMobile,
-        ticket: draggingLine.ticket,
-        sl: draggingLine.type === 'SL' ? finalPrice : 0,
-        tp: draggingLine.type === 'TP' ? finalPrice : 0
-    };
-
-    candleSeries.removePriceLine(draggingLine.lineObj);
-    draggingLine = null;
-
-    try {
-        await fetch('http://127.0.0.1:5000/api/modify', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(reqBody)
-        });
-        fetchDashboardData();
-    } catch (err) {
-        showError('Modify Failed', err.message);
-    }
-}
-
-// ==================================================
-// 5. RENDER TABLES
-// ==================================================
 
 function renderPositions(positions) {
     const tbody = document.querySelector('#positions-table tbody');
@@ -452,12 +422,36 @@ function renderPositions(positions) {
     tbody.innerHTML = '';
 
     positions.forEach(pos => {
-        // 1. Profit Color Logic
         const profitClass = pos.profit >= 0 ? 'text-green' : 'text-red';
-        const profitSign = pos.profit >= 0 ? '+' : ''; // Add '+' for positive numbers
-
-        // 2. Badge Logic
         const badgeClass = pos.type === 'BUY' ? 'badge-buy' : 'badge-sell';
+
+        // --- SL CELL CONTENT (Updated Font) ---
+        let slHtml = '<span style="color:#8a94a6;">-</span>';
+        if(pos.sl > 0) {
+            const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.sl);
+            slHtml = `
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <div style="display:flex; flex-direction:column; line-height:1.2;">
+                        <span style="color:${COL_SL}; font-weight:700;">${pos.sl.toFixed(2)}</span>
+                        <span style="font-size:14px; font-weight:700; color:#ff5555;">${pl}</span>
+                    </div>
+                    <button class="btn-remove-level" onclick="cancelLevel(${pos.ticket}, 'SL')">×</button>
+                </div>`;
+        }
+
+        // --- TP CELL CONTENT (Updated Font) ---
+        let tpHtml = '<span style="color:#8a94a6;">-</span>';
+        if(pos.tp > 0) {
+            const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, pos.tp);
+            tpHtml = `
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <div style="display:flex; flex-direction:column; line-height:1.2;">
+                        <span style="color:${COL_TP}; font-weight:700;">${pos.tp.toFixed(2)}</span>
+                        <span style="font-size:14px; font-weight:700; color:#00b894;">+${pl}</span>
+                    </div>
+                    <button class="btn-remove-level" onclick="cancelLevel(${pos.ticket}, 'TP')">×</button>
+                </div>`;
+        }
 
         tbody.innerHTML += `
             <tr>
@@ -471,16 +465,19 @@ function renderPositions(positions) {
                 <td><strong>${pos.volume}</strong></td>
                 <td>${pos.price_open}</td>
                 <td>${pos.price_current}</td>
-                <td class="${profitClass}">${profitSign}$${pos.profit.toFixed(2)}</td>
+
+                <td>${slHtml}</td>
+                <td>${tpHtml}</td>
+
+                <td class="${profitClass}">$${pos.profit.toFixed(2)}</td>
+
                 <td>
-                    <button style="font-size:10px; padding:4px 8px; background:rgba(54,215,183,0.1); color:#36d7b7; border:1px solid rgba(54,215,183,0.3); border-radius:4px; cursor:pointer;" onclick="startDrag(${pos.ticket}, 'TP', ${pos.price_current})">TP</button>
-                    <button style="font-size:10px; padding:4px 8px; background:rgba(255,85,85,0.1); color:#ff5555; border:1px solid rgba(255,85,85,0.3); border-radius:4px; cursor:pointer; margin-left:5px;" onclick="startDrag(${pos.ticket}, 'SL', ${pos.price_current})">SL</button>
+                    <button class="btn-close-trade" onclick="closeTrade(${pos.ticket})">Close</button>
                 </td>
             </tr>`;
     });
 }
 
-// --- RENDER HISTORY (Closed Trades) ---
 function renderHistory(history) {
     const tbody = document.querySelector('#history-table tbody');
     if(!tbody) return;
@@ -488,31 +485,269 @@ function renderHistory(history) {
 
     history.slice(0, 10).forEach(deal => {
         const profitClass = deal.profit >= 0 ? 'text-green' : 'text-red';
-        const profitSign = deal.profit >= 0 ? '+' : '';
         const badgeClass = deal.type === 'BUY' ? 'badge-buy' : 'badge-sell';
-
-        // Use the new formatter here
-        // Note: backend 'timestamp' is usually raw int. 'time' string might be pre-formatted.
-        // Best to use raw 'timestamp' if available, or parse 'time'.
-        // Let's assume deal.timestamp exists (we added it to backend earlier).
-        // If not, use deal.time but ensure it parses correctly.
         const timeStr = deal.timestamp ? formatDateTime(deal.timestamp) : deal.time;
 
         tbody.innerHTML += `
             <tr>
-                <td class="time-cell">${timeStr}</td> <td style="font-weight: 700;">${deal.symbol}</td>
+                <td class="time-cell">${timeStr}</td>
+                <td style="font-weight: 700;">${deal.symbol}</td>
                 <td><span class="${badgeClass}">${deal.type}</span></td>
                 <td>${deal.volume}</td>
                 <td>${deal.price}</td>
-                <td class="${profitClass}">${profitSign}$${deal.profit.toFixed(2)}</td>
+                <td class="${profitClass}">$${deal.profit.toFixed(2)}</td>
             </tr>`;
     });
 }
 
 // ==================================================
-// 6. UTILITIES (Helpers)
+// 3. UTILITIES & DATA
 // ==================================================
 
+function showHoverMenu(target, x, y) {
+    const menu = document.getElementById('hover-menu');
+    const container = document.getElementById('chart-container');
+    const ticket = target.ticket;
+    const pos = priceLines[ticket].data;
+
+    let html = '';
+    const styleBlue = `color:${COL_BUY}; border-color:${COL_BUY}; background:rgba(41, 98, 255, 0.15)`;
+    const styleRed  = `color:${COL_SELL}; border-color:${COL_SELL}; background:rgba(255, 85, 85, 0.15)`;
+
+    // Helper to generate P/L HTML
+    const getPlHtml = (targetPrice) => {
+        if (!targetPrice) return '';
+        const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, targetPrice);
+        const colorClass = pl >= 0 ? 'pl-green' : 'pl-red';
+        return `<span class="pl-preview ${colorClass}">${pl >= 0 ? '+' : ''}$${pl}</span>`;
+    };
+
+    if (target.type === 'MAIN') {
+        const labelStyle = pos.type === 'BUY' ? styleBlue : styleRed;
+        html += `<span style="font-size:12px; margin-right:8px; font-weight:700; border:1px solid; padding:4px 8px; border-radius:4px; ${labelStyle}">#${ticket}</span>`;
+
+        if (!pos.tp || pos.tp <= 0) {
+            html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'TP', ${pos.price_current})">+ TP</button>`;
+        }
+        if (!pos.sl || pos.sl <= 0) {
+            html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'SL', ${pos.price_current})">+ SL</button>`;
+        }
+    }
+    else if (target.type === 'TP') {
+        html += `<span style="color:${COL_TP}; font-size:13px; font-weight:700;">TP</span>`;
+
+        // --- SHOW P/L PREVIEW ---
+        html += getPlHtml(pos.tp);
+
+        html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'TP', ${pos.tp})">Move</button>`;
+        // Bigger Remove Button
+        html += `<button class="btn-remove-level" onclick="cancelLevel(${ticket}, 'TP')" title="Remove TP">×</button>`;
+    }
+    else if (target.type === 'SL') {
+        html += `<span style="color:${COL_SL}; font-size:13px; font-weight:700;">SL</span>`;
+
+        // --- SHOW P/L PREVIEW ---
+        html += getPlHtml(pos.sl);
+
+        html += `<button class="hover-btn" onmousedown="startDrag(${ticket}, 'SL', ${pos.sl})">Move</button>`;
+        // Bigger Remove Button
+        html += `<button class="btn-remove-level" onclick="cancelLevel(${ticket}, 'SL')" title="Remove SL">×</button>`;
+    }
+
+    menu.innerHTML = html;
+    menu.style.display = 'flex';
+    menu.style.alignItems = 'center';
+
+    // Positioning (Fixed Right)
+    const containerWidth = container.clientWidth;
+    const menuWidth = menu.offsetWidth;
+    const axisWidth = 60;
+    const buffer = 10;
+    const fixedLeft = containerWidth - axisWidth - menuWidth - buffer;
+
+    menu.style.left = fixedLeft + 'px';
+    menu.style.top = (y - 20) + 'px';
+}
+
+function calculatePL(symbol, type, volume, entryPrice, targetPrice) {
+    let diff = 0;
+
+    // 1. Calculate Point Difference
+    if (type === 'BUY') {
+        diff = targetPrice - entryPrice;
+    } else {
+        diff = entryPrice - targetPrice; // Short selling
+    }
+
+    // 2. Estimate Contract Size (Approximation)
+    // Gold ~ 100, BTC ~ 1, Forex ~ 100000 (standard lot)
+    let contractSize = 100000;
+    if (symbol.includes('XAU')) contractSize = 100;
+    if (symbol.includes('BTC')) contractSize = 1;
+    if (symbol.includes('US30') || symbol.includes('DJ30')) contractSize = 10; // Indices often differ
+
+    return (diff * volume * contractSize).toFixed(2);
+}
+
+async function fetchDashboardData() {
+    try {
+        const response = await fetch(`http://127.0.0.1:5000/api/dashboard?mobile=${currentMobile}`);
+        const data = await response.json();
+        if(data.error) return;
+
+        // Stats
+        document.getElementById('val-balance').innerText = `$${data.balance.toFixed(2)}`;
+        const plEl = document.getElementById('val-pl');
+        plEl.innerText = `$${data.profit.toFixed(2)}`;
+        plEl.className = data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
+        document.getElementById('val-power').innerText = `$${data.margin_free.toFixed(2)}`;
+
+        const usedMargin = data.balance - data.margin_free;
+        const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
+        const bar = document.querySelector('.progress-fill');
+        if(bar) bar.style.width = `${usagePct}%`;
+
+        renderPositions(data.positions);
+        renderHistory(data.history);
+        updateChartPositions(data.positions);
+    } catch (e) { console.log(e); }
+}
+
+async function updateLiveCandle() {
+    try {
+        const url = `http://127.0.0.1:5000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=2&_=${Date.now()}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data && data.length > 0) {
+            const latest = data[data.length - 1];
+            candleSeries.update(latest);
+            latestCandle = latest;
+            updateLegend(latest);
+        }
+    } catch (e) { console.error(e); }
+}
+
+async function loadFullChartHistory() {
+    try {
+        const url = `http://127.0.0.1:5000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=2000`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data && data.length > 0) {
+            candleSeries.setData(data);
+            latestCandle = data[data.length - 1];
+            updateLegend(latestCandle);
+            const total = data.length;
+            chart.timeScale().setVisibleLogicalRange({ from: total - 100, to: total + 5 });
+            chart.priceScale('right').applyOptions({ autoScale: true });
+        }
+    } catch (e) { console.error(e); }
+}
+
+// Watchlist
+function renderWatchlist() {
+    const container = document.getElementById('watchlist-container');
+    container.innerHTML = '';
+    WATCHLIST.forEach(item => {
+        const div = document.createElement('div');
+        div.className = `watchlist-item ${item.sym === currentSymbol ? 'active' : ''}`;
+        div.onclick = () => changeSymbol(item.sym);
+        div.innerHTML = `<div><div class="wl-symbol">${item.sym}</div><div class="wl-desc">${item.desc}</div></div>`;
+        container.appendChild(div);
+    });
+}
+
+async function changeSymbol(newSym) {
+    if(currentSymbol === newSym) return;
+
+    // 1. CLEAR OLD LINES (Fix #1)
+    // We must remove them from the chart series, not just the object
+    for (let t in priceLines) {
+        const group = priceLines[t];
+        if(group.main) candleSeries.removePriceLine(group.main);
+        if(group.tp)   candleSeries.removePriceLine(group.tp);
+        if(group.sl)   candleSeries.removePriceLine(group.sl);
+    }
+    priceLines = {}; // Reset the storage object
+
+    // 2. Update State
+    currentSymbol = newSym;
+    document.getElementById('chart-symbol-name').innerText = currentSymbol;
+
+    // 3. Reset Data
+    candleSeries.setData([]);
+    latestCandle = null;
+
+    // 4. Update UI
+    renderWatchlist();
+
+    // 5. Reload
+    await loadFullChartHistory();
+    fetchDashboardData();
+}
+
+function updateLegend(data) {
+    const legend = document.getElementById('chart-legend');
+    if (!data) return;
+
+    // Determine color based on candle direction
+    const valColor = data.close >= data.open ? '#36d7b7' : '#ff5555'; // Green or Red
+    const titleColor = '#ffffff'; // Always White
+
+    legend.innerHTML = `
+        <div style="font-size: 14px; display: flex; gap: 12px; font-family: 'Inter', monospace;">
+            <span>
+                <span style="color:${titleColor}">O</span>
+                <span style="color:${valColor}">${data.open.toFixed(2)}</span>
+            </span>
+            <span>
+                <span style="color:${titleColor}">H</span>
+                <span style="color:${valColor}">${data.high.toFixed(2)}</span>
+            </span>
+            <span>
+                <span style="color:${titleColor}">L</span>
+                <span style="color:${valColor}">${data.low.toFixed(2)}</span>
+            </span>
+            <span>
+                <span style="color:${titleColor}">C</span>
+                <span style="color:${valColor}">${data.close.toFixed(2)}</span>
+            </span>
+        </div>`;
+}
+
+function formatDateTime(timestamp) {
+    if(!timestamp) return '';
+    const d = new Date(typeof timestamp === 'number' ? timestamp * 1000 : timestamp);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = String(d.getFullYear()).slice(-2);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    return `${day}-${month}-${year} ${hours}:${mins}`;
+}
+
+// --- ORDERS ---
+async function placeOrder(type) {
+    const qty = document.getElementById('trade-qty').value;
+    try {
+        const res = await fetch('http://127.0.0.1:5000/api/trade', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                mobile: currentMobile,
+                symbol: currentSymbol,
+                type: type,
+                volume: parseFloat(qty)
+            })
+        });
+        const data = await res.json();
+        if(data.error) showError('Order Failed', data.error);
+        else fetchDashboardData();
+    } catch (e) { showError('Order Failed', e.message); }
+}
+
+// Helpers
 function adjustQty(delta) {
     const input = document.getElementById('trade-qty');
     let val = parseFloat(input.value) + delta;
@@ -520,26 +755,13 @@ function adjustQty(delta) {
     input.value = val.toFixed(2);
 }
 
-function resetChart() {
-    if(chart) chart.timeScale().scrollToRealTime();
-}
-
 function toggleFullscreen() {
     const container = document.querySelector('.chart-col');
-    const isFullscreen = container.classList.toggle('fullscreen-mode');
-
-    // FORCE RESIZE
+    container.classList.toggle('fullscreen-mode');
     setTimeout(() => {
-        if (isFullscreen) {
-            // Explicitly set dimensions to match the CSS calculation
-            const w = window.innerWidth;
-            const h = window.innerHeight - 60; // 60 is header height
-            chart.applyOptions({ width: w, height: h });
-        } else {
-            // Trigger ResizeObserver for normal mode
-            window.dispatchEvent(new Event('resize'));
-        }
-    }, 50); // Small delay to allow CSS class to apply
+        window.dispatchEvent(new Event('resize'));
+        if(chart) chart.timeScale().scrollToRealTime();
+    }, 10);
 }
 
 function showError(title, message) {
@@ -554,13 +776,55 @@ function showError(title, message) {
 function closeModal() {
     isErrorOpen = false;
     document.getElementById('error-modal').style.display = 'none';
+
+}
+async function closeTrade(ticket) {
+    // Optional: Add confirmation if you want
+    // if(!confirm('Close Trade?')) return;
+
+    try {
+        const res = await fetch('http://127.0.0.1:5000/api/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                mobile: currentMobile,
+                ticket: ticket
+            })
+        });
+
+        const data = await res.json();
+
+        if(data.error) {
+            showError('Close Failed', data.error);
+        } else {
+            console.log("Trade Closed");
+            // Refresh data immediately
+            fetchDashboardData();
+        }
+
+    } catch (e) {
+        showError('Network Error', e.message);
+    }
 }
 
-// --- EXPOSE GLOBALS FOR HTML ---
+function resetChart() {
+    if (!chart) return;
+
+    // 1. Jump to the current time (Right side)
+    chart.timeScale().scrollToRealTime();
+
+    // 2. Reset the Vertical Price Scale to "Auto"
+    // (This fixes the chart if you dragged the price axis manually)
+    chart.priceScale('right').applyOptions({
+        autoScale: true
+    });
+}
+
+// Global Exports
 window.closeModal = closeModal;
 window.toggleFullscreen = toggleFullscreen;
-window.resetChart = resetChart;
 window.placeOrder = placeOrder;
 window.adjustQty = adjustQty;
 window.startDrag = startDrag;
 window.changeSymbol = changeSymbol;
+window.cancelLevel = cancelLevel;

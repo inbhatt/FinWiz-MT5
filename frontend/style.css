@@ -223,7 +223,7 @@ button#loginBtn:active { transform: scale(0.98); }
 .stat-card { display: flex; flex-direction: column; justify-content: center; flex: 1; }
 .stat-card h3 { color: var(--text-muted); font-size: 13px; margin: 0 0 8px 0; text-transform: uppercase; font-weight: 700; }
 .stat-value { font-size: 26px; font-weight: 800; color: var(--text-white); }
-.text-green { color: #36d7b7 !important; font-weight: 700; }
+.text-green { color: #00b894 !important; font-weight: 700; }
 .text-red { color: #ff5555 !important; font-weight: 700; }
 
 /* Chart */
@@ -278,6 +278,14 @@ input[type=number] { -moz-appearance: textfield; }
     padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
     font-size: 15px; color: var(--text-white); font-weight: 500;
 }
+
+.data-table td.text-green,
+.data-table td.text-red {
+    font-size: 18px !important; /* Much Bigger */
+    font-weight: 800;
+    letter-spacing: 0.5px;
+}
+
 .symbol-cell { display: flex; align-items: center; }
 .symbol-icon {
     width: 38px; height: 38px; background: rgba(255,255,255,0.05); border-radius: 10px;
@@ -288,14 +296,21 @@ input[type=number] { -moz-appearance: textfield; }
 
 /* BADGES */
 .badge-buy {
-    background: rgba(54, 215, 183, 0.15); color: #36d7b7;
-    padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 800;
-    text-transform: uppercase; border: 1px solid rgba(54, 215, 183, 0.2);
+    background: rgba(41, 98, 255, 0.15); /* Blue Tint */
+    color: #2962ff;
+    border: 1px solid rgba(41, 98, 255, 0.3);
 }
 .badge-sell {
-    background: rgba(255, 85, 85, 0.15); color: #ff5555;
-    padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 800;
-    text-transform: uppercase; border: 1px solid rgba(255, 85, 85, 0.2);
+    background: rgba(255, 85, 85, 0.15); /* Red Tint */
+    color: #ff5555;
+    border: 1px solid rgba(255, 85, 85, 0.3);
+}
+
+.badge-buy, .badge-sell {
+    border-radius: 12px; /* Fully rounded pills */
+    padding: 5px 12px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
 }
 
 /* --- CHART LAYOUT & WRAPPER --- */
@@ -369,6 +384,46 @@ input[type=number] { -moz-appearance: textfield; }
     border-radius: 8px; color: #e2e8f0; padding: 10px; font-family: monospace; font-size: 13px; resize: none; outline: none;
 }
 
+.btn-close-trade {
+    background: rgba(255, 85, 85, 0.1);
+    color: #ff5555;
+    border: 1px solid rgba(255, 85, 85, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 15px; /* Bigger font */
+    font-weight: 700;
+    padding: 8px 12px; /* Bigger touch area */
+    transition: all 0.2s;
+}
+.btn-close-trade:hover {
+    background: #ff5555;
+    color: white;
+}
+
+.btn-remove-level {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #ff5555; /* Red by default for visibility */
+    font-size: 18px; /* Much Bigger */
+    font-weight: 800;
+    cursor: pointer;
+    margin-left: 8px;
+    width: 24px;  /* Fixed Width */
+    height: 24px; /* Fixed Height */
+    line-height: 20px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+.btn-remove-level:hover {
+    background: #ff5555;
+    color: white;
+    transform: scale(1.1);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+
 .time-cell {
     color: #8a94a6;
     font-size: 15px !important; /* Increased from 12px */
@@ -384,3 +439,55 @@ input[type=number] { -moz-appearance: textfield; }
 
 .data-table th {
     font-size: 14px;
+}
+
+.chart-hover-menu {
+    position: absolute;
+    display: none; /* Hidden by default */
+    background: rgba(15, 20, 35, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 8px;
+    border-radius: 8px;
+    z-index: 100;
+    backdrop-filter: blur(5px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    pointer-events: auto; /* clickable */
+    transition: opacity 0.1s;
+    white-space: nowrap;
+    min-width: 140px;
+    justify-content: flex-end;
+    font-family: 'Inter', sans-serif;
+}
+
+.chart-hover-menu span {
+    font-size: 15px !important; /* Bigger Label */
+    font-weight: 800;
+}
+
+.hover-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 0 4px;
+    border-color: rgba(255,255,255,0.2);
+}
+.hover-btn:hover { background: rgba(255,255,255,0.1); color: white; border-color: #36d7b7; }
+.hover-btn.is-sl:hover { background: rgba(255, 85, 85, 0.2); color: #ff5555; border-color: #ff5555; }
+.hover-btn.is-close:hover { background: #ff5555; color: white; border-color: #ff5555; }
+
+.pl-preview {
+    font-size: 14px;
+    font-weight: 700;
+    margin-left: 6px;
+    margin-right: 8px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.3);
+}
+.pl-green { color: #00b894; }
+.pl-red   { color: #ff5555; }

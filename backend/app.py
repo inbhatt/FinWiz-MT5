@@ -218,27 +218,55 @@ def get_candles():
     return jsonify(data)
 
 
+def get_filling_mode(symbol):
+    symbol_info = mt5.symbol_info(symbol)
+    if not symbol_info:
+        return mt5.ORDER_FILLING_FOK
+
+    # filling_mode is a bitmask:
+    # 1 means FOK is allowed
+    # 2 means IOC is allowed
+
+    modes = symbol_info.filling_mode
+
+    # Check for FOK (Fill or Kill) - Preferred for Crypto
+    if modes & 1:
+        return mt5.ORDER_FILLING_FOK
+
+    # Check for IOC (Immediate or Cancel)
+    if modes & 2:
+        return mt5.ORDER_FILLING_IOC
+
+    # Fallback
+    return mt5.ORDER_FILLING_RETURN
+
 @app.route('/api/trade', methods=['POST'])
 def place_trade():
     data = request.json
     mobile = data.get('mobile')
-    symbol = data.get('symbol', 'XAUUSD')
+    symbol = data.get('symbol', 'BTCUSDT')  # Default to what you are using
     action_type = data.get('type')
     volume = float(data.get('volume', 0.01))
 
     success, msg = connect_to_mt5(mobile)
     if not success: return jsonify({"error": msg}), 400
 
-    order_type = mt5.ORDER_TYPE_BUY if action_type == 'BUY' else mt5.ORDER_TYPE_SELL
+    # 1. Check Algo Trading
+    if not mt5.terminal_info().trade_allowed:
+        return jsonify({"error": "Algo Trading is OFF. Enable it in MT5 Terminal."}), 403
 
-    # FORCE SYMBOL SELECTION
-    mt5.symbol_select(symbol, True)
+    # 2. Select Symbol & Get Price
+    if not mt5.symbol_select(symbol, True):
+        return jsonify({"error": f"Symbol {symbol} not found"}), 404
 
-    # Get LIVE Tick Price
     tick = mt5.symbol_info_tick(symbol)
-    if not tick: return jsonify({"error": "Market Closed or Symbol Invalid"}), 400
+    if not tick: return jsonify({"error": "Market Closed"}), 400
 
     price = tick.ask if action_type == 'BUY' else tick.bid
+    order_type = mt5.ORDER_TYPE_BUY if action_type == 'BUY' else mt5.ORDER_TYPE_SELL
+
+    # 3. GET CORRECT FILLING MODE (The Fix)
+    fill_mode = get_filling_mode(symbol)
 
     request_data = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -250,12 +278,15 @@ def place_trade():
         "magic": 234000,
         "comment": "Midnight Pro Web",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": fill_mode,  # <--- Updated here
     }
 
     result = mt5.order_send(request_data)
+
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        return jsonify({"error": f"Order Failed: {result.comment}"}), 400
+        # Debugging: Print exactly what failed to Python console
+        print(f"Trade Failed: {result.comment}, RetCode: {result.retcode}")
+        return jsonify({"error": f"Order Failed: {result.comment} ({result.retcode})"}), 400
 
     return jsonify({"message": "Order Placed", "ticket": result.order})
 
@@ -264,25 +295,103 @@ def place_trade():
 def modify_trade():
     data = request.json
     mobile = data.get('mobile')
-    ticket = int(data.get('ticket'))
-    sl = float(data.get('sl', 0.0))
-    tp = float(data.get('tp', 0.0))
+    try:
+        ticket = int(data.get('ticket'))
+    except:
+        return jsonify({"error": "Invalid Ticket"}), 400
 
     success, msg = connect_to_mt5(mobile)
     if not success: return jsonify({"error": msg}), 400
 
+    # 1. FETCH CURRENT POSITION (Crucial Step)
+    # We need to see what the current SL/TP is so we don't accidentally delete it.
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        return jsonify({"error": "Position not found or already closed"}), 404
+
+    current_pos = positions[0]
+
+    # 2. MERGE NEW VALUES WITH OLD VALUES
+    # If 'sl' is in data, use it. Otherwise, keep the old SL.
+    # If 'tp' is in data, use it. Otherwise, keep the old TP.
+
+    new_sl = float(data['sl']) if 'sl' in data else current_pos.sl
+    new_tp = float(data['tp']) if 'tp' in data else current_pos.tp
+
     request_data = {
         "action": mt5.TRADE_ACTION_SLTP,
         "position": ticket,
-        "sl": sl,
-        "tp": tp
+        "sl": new_sl,
+        "tp": new_tp
     }
 
     result = mt5.order_send(request_data)
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         return jsonify({"error": f"Modify Failed: {result.comment}"}), 400
 
-    return jsonify({"message": "Position Updated"})
+    return jsonify({"message": "Position Updated", "sl": new_sl, "tp": new_tp})
+
+
+# ... inside app.py ...
+
+@app.route('/api/close', methods=['POST'])
+def close_trade():
+    try:
+        data = request.json
+        mobile = data.get('mobile')
+        ticket = int(data.get('ticket'))
+
+        success, msg = connect_to_mt5(mobile)
+        if not success: return jsonify({"error": msg}), 400
+
+        # 1. Select Position
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return jsonify({"error": "Position not found or already closed"}), 404
+
+        pos = positions[0]
+
+        # 2. Get Closing Price
+        symbol = pos.symbol
+        if not mt5.symbol_select(symbol, True):
+            return jsonify({"error": "Symbol select failed"}), 404
+
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick: return jsonify({"error": "Market Closed"}), 400
+
+        # Closing logic: Buy -> Sell, Sell -> Buy
+        price = tick.bid if pos.type == 0 else tick.ask
+        order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+
+        # 3. Filling Mode
+        fill_mode = get_filling_mode(symbol)
+
+        # 4. Send Close Order
+        request_data = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": pos.volume,
+            "type": order_type,
+            "position": ticket,
+            "price": price,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": "Midnight Pro Close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": fill_mode,
+        }
+
+        result = mt5.order_send(request_data)
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return jsonify({"error": f"Close Failed: {result.comment}"}), 400
+
+        # FIX: Removed 'result.profit' because it causes the 500 Crash
+        return jsonify({"message": "Trade Closed Successfully", "ticket": result.order})
+
+    except Exception as e:
+        print(f"CLOSE ERROR: {e}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
 
 if __name__ == '__main__':

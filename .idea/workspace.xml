@@ -5,21 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="71aad98d-cfb3-4fe2-b356-87a4fd89dc3b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/FinWiz.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/backend/app.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/backend/db_manager.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/dashboard.html" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/dashboard.js" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/index.html" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/main.js" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/renderer.js" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/frontend/style.css" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/FinWiz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/FinWiz.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/dashboard.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/dashboard.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/dashboard.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/dashboard.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/style.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,7 +46,8 @@
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "master",
-    "last_opened_file_path": "D:/Work/Python/FinWiz-MT5"
+    "last_opened_file_path": "D:/Work/Python/FinWiz-MT5",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   }
 }]]></component>
   <component name="RecentsManager">
@@ -73,8 +65,8 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
-      <option name="SDK_NAME" value="Python 3.14 (FinWiz)" />
-      <option name="WORKING_DIRECTORY" value="D:\Work\Python\FinWiz\backend" />
+      <option name="SDK_NAME" value="Python 3.14 virtualenv at D:\Work\Python\FinWiz-MT5\.venv" />
+      <option name="WORKING_DIRECTORY" value="D:\Work\Python\FinWiz-MT5\backend" />
       <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
