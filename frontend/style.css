@@ -464,6 +464,16 @@ input[type=number] { -moz-appearance: textfield; }
     font-weight: 800;
 }
 
+#hover-menu {
+    position: absolute;
+    /* Fixed to the right side (left of the Y-axis labels) */
+    right: 60px;
+    left: auto !important; /* Override JS left calculations */
+    z-index: 100;
+    /* Vertically centered on the line (handled by JS top) */
+    transform: translateY(-50%);
+}
+
 .hover-btn {
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
@@ -491,3 +501,391 @@ input[type=number] { -moz-appearance: textfield; }
 }
 .pl-green { color: #00b894; }
 .pl-red   { color: #ff5555; }
+
+/* --- ACCOUNT MANAGER & MODALS --- */
+.sidebar-footer {
+    margin-top: auto; padding: 20px; border-top: 1px solid var(--glass-border);
+    display: flex; flex-direction: column; gap: 10px;
+}
+.nav-item {
+    color: var(--text-muted); font-size: 14px; font-weight: 600; padding: 10px;
+    border-radius: 8px; transition: all 0.2s; cursor: pointer; display: flex; align-items: center;
+}
+.nav-item:hover { background: rgba(255,255,255,0.05); color: white; }
+.logout-btn:hover { background: rgba(255, 85, 85, 0.1); color: #ff5555; }
+
+/* Modal Override */
+#account-modal .modal-box { width: 650px; background: var(--glass-bg); border: 1px solid var(--glass-border); }
+#account-modal .modal-header { background: rgba(255, 255, 255, 0.03); }
+#account-modal .btn-icon { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
+
+#account-modal input,
+#account-modal .styled-input {
+    background: rgba(0, 0, 0, 0.4) !important;   /* Dark transparent background */
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    color: white !important;                      /* White text */
+    height: 45px !important;                      /* Fixed uniform height */
+    padding: 0 12px !important;
+    border-radius: 6px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 14px !important;
+    box-sizing: border-box !important;
+    line-height: normal !important; /* Fixes text alignment in number fields */
+}
+
+#account-modal input:focus,
+#account-modal .styled-input:focus {
+    border-color: #36d7b7 !important;
+    background: rgba(0, 0, 0, 0.6) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(54, 215, 183, 0.2) !important;
+}
+
+#account-modal .config-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+/* 3. Specific Fix for the "Volume" field in rules which might need to be smaller/compact */
+#account-modal .config-row input {
+    height: 40px !important;  /* Match Select Height */
+    line-height: normal !important;
+    padding: 0 10px !important;
+    box-sizing: border-box !important;
+}
+
+/* 4. Remove the white background from the "Add Account" form panel */
+#account-form.form-panel {
+    background: rgba(0, 0, 0, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 5. Fix Placeholder Text Color */
+#account-modal input::placeholder {
+    color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Cards */
+.account-card {
+    background: rgba(255, 255, 255, 0.03); border: 1px solid var(--glass-border);
+    border-radius: 8px; padding: 16px; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+}
+
+.account-card .btn-secondary {
+    padding: 6px 14px !important; /* Larger touch area */
+    font-size: 13px !important;   /* Readable text */
+    height: 32px;
+    line-height: 18px;
+}
+
+.account-card .btn-remove-level {
+    width: 32px !important;      /* Wider square */
+    height: 32px !important;     /* Taller square */
+    font-size: 20px !important;  /* Bigger X icon */
+    line-height: 28px !important; /* Center the X */
+}
+
+.account-card h4 { margin: 0 0 4px 0; font-size: 15px; color: white; }
+.account-card p { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+/* Form Inputs */
+.form-panel { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--glass-border); border-radius: 8px; padding: 20px; margin-top: 20px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.input-group { display: flex; flex-direction: column; gap: 6px; }
+.input-group label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); }
+
+/* Force Inputs Dark (Fixes White Flash) */
+.styled-input {
+    height: 42px !important
+    background: rgba(0, 0, 0, 0.3) !important; border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: white !important; padding: 10px 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box;
+}
+.styled-input:focus { border-color: var(--accent-cyan) !important; outline: none; }
+
+/* Buttons */
+.btn-primary { background: var(--accent-cyan); color: #050810; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 800; cursor: pointer; }
+.btn-secondary { background: transparent; color: var(--text-muted); border: 1px solid var(--glass-border); padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+.btn-add-main { width: 100%; padding: 12px; background: rgba(54, 215, 183, 0.1); color: var(--accent-cyan); border: 1px dashed rgba(54, 215, 183, 0.4); border-radius: 8px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+.btn-dashed { border: 1px dashed rgba(255,255,255,0.3); background: none; color: var(--text-muted); font-size: 12px; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+.config-section { border-top: 1px solid var(--glass-border); padding-top: 16px; margin-top: 16px; }
+.config-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.config-row { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+
+/* --- ACCORDION TABLE STYLES --- */
+
+/* The arrow icon */
+.toggle-icon {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.2s;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.toggle-icon.expanded {
+    transform: rotate(90deg);
+    color: white;
+}
+
+/* The Child Row (Hidden by default) */
+.child-row.show {
+    display: table-row; /* Visible */
+}
+
+/* Indent the child account name */
+/* --- TOGGLE SWITCH --- */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 18px;
+    margin-right: 10px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255, 255, 255, 0.1);
+    transition: .4s;
+    border-radius: 34px;
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 12px;
+    width: 12px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: var(--accent-cyan);
+    border-color: var(--accent-cyan);
+}
+
+input:checked + .slider:before {
+    transform: translateX(16px);
+    background-color: #050810;
+}
+
+/* --- ACCORDION TABLE ALIGNMENT --- */
+
+/* Rotate the arrow when expanded */
+.toggle-icon {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.2s;
+    font-size: 10px;
+    color: #8a94a6;
+    margin-right: 5px;
+}
+.toggle-icon.expanded {
+    transform: rotate(90deg);
+    color: white;
+}
+
+/* Child Row Styling */
+.child-row {
+    background: rgba(0, 0, 0, 0.2); /* Darker background to distinguish from Master */
+}
+
+/* Child Row Cells */
+.child-row td {
+    padding: 8px 12px !important; /* Slightly smaller padding than master */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* Indent the Account Name */
+.child-row td,
+.child-text,
+.child-account-name {
+    font-size: 15px !important;
+    padding-left: 35px !important; /* Visual indentation */
+    color: #e2e8f0;
+    font-weight: 500;
+}
+
+.child-account-name {
+    color: #e2e8f0;
+    font-weight: 600;
+}
+
+.child-row .btn-remove-level {
+    /* Typography */
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    font-family: 'Inter', sans-serif !important; /* Fixes typeface change on hover */
+    color: #ff5555;
+    
+    /* Box Model */
+    background: rgba(255, 85, 85, 0.15);
+    border: 1px solid rgba(255, 85, 85, 0.3);
+    border-radius: 4px;
+    
+    /* Layout & Sizing */
+    display: inline-flex !important; /* Flexbox aligns text perfectly */
+    align-items: center;
+    justify-content: center;
+    height: 22px !important;         /* Reduced height as requested */
+    padding: 0 10px !important;      /* Horizontal padding only */
+    min-width: 50px;
+    white-space: nowrap !important;
+    
+    /* Transition */
+    transition: all 0.2s;
+    cursor: pointer;
+}
+.child-row .btn-remove-level:hover {
+    background: #ff5555;
+    color: white;
+    border-color: #ff5555;
+    transform: none; /* remove scale effect for this small button */
+}
+
+.history-account-name {
+    font-size: 13px !important;  /* Much bigger than the previous 10px */
+    font-weight: 500;
+    color: #8a94a6;              /* Readable Grey */
+    margin-top: 4px;             /* Spacing from Symbol */
+    letter-spacing: 0.3px;
+}
+
+/* Optional: Ensure the Symbol above it pops */
+#history-table td:nth-child(2) {
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.master-row {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.master-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.child-row .btn-remove-level {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    background: rgba(255, 85, 85, 0.15);
+    border: 1px solid rgba(255, 85, 85, 0.3);
+    color: #ff5555;
+    border-radius: 4px;
+    padding: 4px 12px !important; /* Added Horizontal Padding */
+    white-space: nowrap !important; /* Prevent text wrap */
+    min-width: 60px; /* Ensure button isn't squashed */
+    display: inline-block;
+    text-align: center;
+}
+
+/* --- FIX: CURSOR ON ROW --- */
+.remove-x {
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 14px;
+    color: #555;
+    padding: 0 4px;
+    transition: color 0.2s;
+}
+.remove-x:hover {
+    color: #ff5555;
+}
+
+.child-text, .master-row td {
+    /* Ensures the column content (price + P/L) stacks nicely */
+    vertical-align: middle;
+}
+
+/* --- CUSTOM DROPDOWN STYLING --- */
+.config-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center; /* Vertically center items */
+}
+
+/* Base style for inputs in config row to ensure height match */
+.config-row .styled-input {
+    height: 38px !important; /* Force equal height */
+    box-sizing: border-box;
+    margin: 0; /* Remove default margins */
+}
+
+/* Custom Select Styling */
+select.styled-input {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: var(--input-bg);
+    color: var(--input-text);
+    cursor: pointer;
+    padding-right: 30px; /* Space for the arrow */
+    
+    /* Custom Arrow (Dark Grey to match white input) */
+    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23333%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 10px;
+}
+
+/* Hover effect */
+select.styled-input:hover {
+    border-color: var(--accent-cyan);
+}
+
+/* --- CUSTOM DROPDOWN & INPUT CONFIG --- */
+.config-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+/* Force specific height and box model for BOTH Select and Number inputs */
+.config-row .styled-input {
+    height: 40px !important;       /* Explicit fixed height */
+    min-height: 40px !important;   /* Prevent shrinking */
+    padding: 0 12px !important;    /* Consistent padding */
+    line-height: normal !important; /* Reset line-height */
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    display: flex;
+    align-items: center;
+}
+
+/* --- THEMED DROPDOWN LIST (Fix for Issue #2) --- */
+/* This styles the actual popup menu in Chrome/Electron */
+select.styled-input option {
+    background-color: var(--bg-dark); /* Dark Navy Background */
+    color: var(--text-white);         /* White Text */
+    padding: 10px;
+}
+
+/* Custom Select Arrow */
+select.styled-input {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2336d7b7%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 10px;
+    padding-right: 30px !important;
+}

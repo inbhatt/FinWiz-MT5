@@ -1,6 +1,7 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
+// We import exec ONLY for the shutdown command
+const { spawn, exec } = require('child_process');
 
 let mainWindow;
 let backendProcess;
@@ -15,58 +16,86 @@ function createWindow() {
         }
     });
 
-    mainWindow.loadFile('frontend/index.html'); // Adjust path as needed
+    mainWindow.loadFile('frontend/index.html');
 
     mainWindow.on('closed', function () {
         mainWindow = null;
     });
 }
 
-// --- START PYTHON BACKEND ---
+// --- IPC HANDLERS ---
+ipcMain.handle('show-alert', async (event, title, message) => {
+    if (!mainWindow) return;
+    await dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: title,
+        message: message,
+        buttons: ['OK']
+    });
+});
+
+// --- START PYTHON BACKEND (YOUR ORIGINAL CODE) ---
 function startBackend() {
+    if (backendProcess) {
+        console.log("Backend is already running. Skipping new spawn.");
+        return;
+    }
     const isDev = !app.isPackaged;
     let backendPath;
+    let args = [];
 
     if (isDev) {
+        // Run python script directly in dev mode
         backendPath = 'python';
-        const args = ['backend/app.py'];
+        args = ['backend/app.py'];
+        console.log('Starting Backend in DEV Mode...');
         backendProcess = spawn(backendPath, args);
     } else {
+        // Run the compiled executable in production
         backendPath = path.join(process.resourcesPath, 'finwiz-server.exe');
+        console.log('Starting Backend in PROD Mode...');
         backendProcess = spawn(backendPath);
     }
 
-    // Handle Standard Output
-    backendProcess.stdout.on('data', (data) => {
-        console.log(`Backend: ${data}`);
-    });
-
-    // Handle "Errors" (and Flask Logs)
-    backendProcess.stderr.on('data', (data) => {
-        const msg = data.toString().trim();
-
-        // FILTER: If it's a standard HTTP 200 success, just log it (don't scream ERROR)
-        if (msg.includes('" 200 -') || msg.includes('" 304 -') || msg.includes('Running on http')) {
-
-        }else {
-            console.error(`Backend Log: ${msg}`);
-        }
-    });
+    if (backendProcess) {
+        backendProcess.stdout.on('data', (data) => {
+            console.log(`Backend: ${data}`);
+        });
+        backendProcess.stderr.on('data', (data) => {
+            console.error(`Backend Error: ${data}`);
+        });
+    }
 }
 
 // --- APP LIFECYCLE ---
 app.on('ready', () => {
+    // We do NOT run cleanup here to avoid killing the process we are about to start
     startBackend();
-    // Give Flask 2 seconds to start before showing window
+    
+    // Give Flask 2 seconds to initialize
     setTimeout(createWindow, 2000);
 });
 
 app.on('window-all-closed', function () {
-    // Kill the python process when app closes
-    if (backendProcess) backendProcess.kill();
     if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('quit', () => {
-    if (backendProcess) backendProcess.kill();
+// --- THE FIX: ROBUST SHUTDOWN ---
+app.on('will-quit', () => {
+    if (backendProcess) {
+        console.log("Stopping Backend...");
+        
+        if (process.platform === 'win32') {
+            // Windows Force Kill: This kills the process tree (Python + Scripts)
+            // /F = Force, /T = Tree (Child processes), /PID = Process ID
+            exec(`taskkill /pid ${backendProcess.pid} /f /t`, (err) => {
+                if (err) console.error("Taskkill failed:", err);
+            });
+        } else {
+            // Mac/Linux Standard Kill
+            backendProcess.kill();
+        }
+        
+        backendProcess = null;
+    }
 });

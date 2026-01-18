@@ -100,7 +100,8 @@ Desktop.ini
 *.swp
 *.swo
 *.tmp
-
+serviceAccountKey.json
+backend/serviceAccountKey.json
 # =========================
 # SQLite / local DB (common in python apps)
 # =========================
