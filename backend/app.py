@@ -77,6 +77,9 @@ def sync_all_accounts_data(user_id):
     global SYSTEM_STATE
     if not user_id: return
 
+    # Prevent stacking syncs
+    if lock.locked(): return
+
     try:
         accs_ref = db.collection('USERS').document(user_id).collection('ACCOUNTS')
         docs = accs_ref.where('IS_ACTIVE', '==', True).get()
@@ -85,6 +88,8 @@ def sync_all_accounts_data(user_id):
         if not db_accounts: return
 
         with lock:
+            SYSTEM_STATE["last_update"] = time.time()  # Update timestamp
+
             for acc in db_accounts:
                 path = acc.get('TERMINAL_PATH')
                 if not path: continue
@@ -145,7 +150,10 @@ def sync_all_accounts_data(user_id):
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard_data():
     user_id = request.args.get('user_id')
-    if not SYSTEM_STATE["accounts"]:
+
+    # NEW: Auto-refresh if data is stale (> 1.5 seconds old)
+    # This ensures charts update when TP/SL is hit automatically
+    if time.time() - SYSTEM_STATE["last_update"] > 1.5:
         threading.Thread(target=sync_all_accounts_data, args=(user_id,)).start()
 
     total_balance = 0.0
@@ -155,13 +163,33 @@ def get_dashboard_data():
     all_history = []
 
     active_symbols = set()
-    for acc in SYSTEM_STATE["accounts"].values():
-        for p in acc['positions']: active_symbols.add(p['symbol'])
+    if SYSTEM_STATE["accounts"]:
+        for acc in SYSTEM_STATE["accounts"].values():
+            for p in acc['positions']: active_symbols.add(p['symbol'])
+
+    # Get live prices for active symbols + watchlist (if needed)
+    # Note: request.args.get('watchlist') handling can be added here if not already present
+    watchlist_str = request.args.get('watchlist', '')
+    if watchlist_str:
+        for w in watchlist_str.split(','):
+            if w.strip(): active_symbols.add(w.strip())
+
+    current_prices = {}  # Send to frontend
+
+    # Context switch might be needed for prices if using master path,
+    # but usually symbol_info_tick works if initialized.
+    # To be safe, we assume Sync Worker updates SYSTEM_STATE["prices"] mostly,
+    # but we can try to fetch live if we are in a valid context.
 
     for sym in active_symbols:
         tick = mt5.symbol_info_tick(sym)
-        if tick: SYSTEM_STATE["prices"][sym] = tick.bid
+        if tick:
+            SYSTEM_STATE["prices"][sym] = tick.bid
+            current_prices[sym] = {"bid": tick.bid, "ask": tick.ask}
+        else:
+            current_prices[sym] = {"bid": SYSTEM_STATE["prices"].get(sym, 0.0), "ask": 0.0}
 
+    # ... (Rest of aggregation logic remains same) ...
     for login, acc_data in SYSTEM_STATE["accounts"].items():
         total_balance += acc_data['balance']
         total_margin_used += acc_data.get('margin_used', 0.0)
@@ -226,10 +254,14 @@ def get_dashboard_data():
         final_positions.append(m)
 
     all_history.sort(key=lambda x: x['timestamp'], reverse=True)
+
     return jsonify({
         "balance": round(total_balance, 2), "equity": round(total_equity, 2),
-        "margin_free": round(total_equity - total_margin_used, 2), "profit": round(total_equity - total_balance, 2),
-        "positions": final_positions, "history": all_history[:50]
+        "margin_free": round(total_equity - total_margin_used, 2),
+        "margin_used": round(total_margin_used, 2),
+        "profit": round(total_equity - total_balance, 2),
+        "positions": final_positions, "history": all_history[:50],
+        "prices": current_prices
     })
 
 

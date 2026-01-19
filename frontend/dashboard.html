@@ -12,79 +12,84 @@
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   </head>
   <body>
-    <div class="app-container">
-      <nav class="top-nav">
-        <div class="logo">FinWiz</div>
-        <div style="font-size: 12px; color: #8a94a6" id="connection-status">
-          ● Connected
+    <div class="app-container" id="app-container">
+      <nav class="top-stats-bar hidden" id="top-bar">
+        <div class="stat-item">
+          <span class="stat-label">Balance</span>
+          <span class="stat-value" id="val-balance">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Equity</span>
+          <span class="stat-value" id="val-equity">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">P/L</span>
+          <span class="stat-value" id="val-pl">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Used Margin</span>
+          <span class="stat-value" id="val-used">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Free Margin</span>
+          <span class="stat-value" id="val-power">--</span>
         </div>
       </nav>
 
-      <aside class="sidebar">
-        <div style="flex: 1; overflow-y: auto">
-          <div class="watchlist-header">Watchlist</div>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-top">
+          <div class="watchlist-header">
+            <span>Watchlist</span>
+            <button class="btn-icon sidebar-toggle" onclick="toggleSidebar()">
+              «
+            </button>
+          </div>
           <div id="watchlist-container"></div>
         </div>
 
         <div class="sidebar-footer">
           <div class="nav-item" onclick="openAccountModal()">
-            <span style="margin-right: 10px">👥</span> Accounts
+            <span style="margin-right: 10px">👥</span>
+            <span class="nav-text">Accounts</span>
           </div>
           <div class="nav-item logout-btn" onclick="logout()">
-            <span style="margin-right: 10px">🚪</span> Logout
+            <span style="margin-right: 10px">🚪</span>
+            <span class="nav-text">Logout</span>
           </div>
         </div>
       </aside>
 
+      <button
+        id="sidebar-expand-btn"
+        class="sidebar-expand-btn"
+        onclick="toggleSidebar()"
+      >
+        ☰
+      </button>
+
       <main class="main-content">
         <div class="dashboard-grid">
-          <div class="top-row">
-            <div class="stats-col">
-              <div class="stat-card">
-                <h3>Total Balance</h3>
-                <div class="stat-value" id="val-balance">--</div>
-              </div>
-              <div class="stat-card">
-                <h3>Profit / Loss</h3>
-                <div class="stat-value" id="val-pl">--</div>
-              </div>
-              <div class="stat-card">
-                <h3>Free Margin</h3>
-                <div class="stat-value" id="val-power">--</div>
-                <div
-                  class="progress-bar"
-                  style="
-                    height: 4px;
-                    background: #222;
-                    margin-top: 10px;
-                    border-radius: 2px;
-                  "
-                >
-                  <div
-                    class="progress-fill"
-                    style="width: 0%; height: 100%; background: #36d7b7"
-                  ></div>
-                </div>
+          <div class="chart-col" style="height: 75vh; min-height: 500px">
+            <div class="chart-header">
+              <h2 id="chart-symbol-name" style="margin: 0; font-size: 16px">
+                XAUUSD
+              </h2>
+              <div class="chart-controls">
+                <button>1M</button>
+                <button>15M</button>
+                <button class="active">1H</button>
+                <button>4H</button>
+                <button>1D</button>
+                <button onclick="resetChart()" class="btn-icon">↺</button>
+                <button onclick="toggleFullscreen()" class="btn-icon">⛶</button>
               </div>
             </div>
 
-            <div class="chart-col">
-              <div class="chart-header">
-                <h2 id="chart-symbol-name" style="margin: 0; font-size: 16px">
-                  XAUUSD
-                </h2>
-                <div class="chart-controls">
-                  <button>1M</button>
-                  <button>15M</button>
-                  <button class="active">1H</button>
-                  <button>4H</button>
-                  <button>1D</button>
-                  <button onclick="resetChart()" class="btn-icon">↺</button>
-                  <button onclick="toggleFullscreen()" class="btn-icon">
-                    ⛶
-                  </button>
-                </div>
-              </div>
+            <div class="chart-area-wrapper">
+              <div
+                id="chart-legend"
+                style="position: absolute; pointer-events: none; z-index: 20"
+              ></div>
 
               <div class="trading-panel">
                 <button class="btn-sell" onclick="placeOrder('SELL')">
@@ -92,66 +97,74 @@
                 </button>
                 <div class="qty-control">
                   <button onclick="adjustQty(-0.5)">−</button>
-                  <input
-                    type="number"
-                    id="trade-qty"
-                    value="1"
-                    step="0.5"
-                    style="width: 50px"
-                  />
+                  <input type="number" id="trade-qty" value="1" step="0.5" />
                   <button onclick="adjustQty(0.5)">+</button>
                 </div>
                 <button class="btn-buy" onclick="placeOrder('BUY')">BUY</button>
               </div>
 
-              <div class="chart-area-wrapper">
-                <div
-                  id="chart-legend"
-                  style="position: absolute; pointer-events: none; z-index: 20"
-                ></div>
-                <div id="hover-menu" class="chart-hover-menu"></div>
-                <div
-                  id="chart-container"
-                  style="width: 100%; height: 100%"
-                ></div>
+              <div id="trade-labels-left" class="trade-label-container"></div>
+
+              <div id="hover-menu" class="chart-hover-menu"></div>
+
+              <div id="chart-container" style="width: 100%; height: 100%"></div>
+            </div>
+          </div>
+
+          <div class="section-container">
+            <div
+              class="section-header"
+              onclick="toggleSection('positions-wrapper', this)"
+            >
+              <h2 style="font-size: 16px">Open Positions</h2>
+              <button class="btn-collapse">▼</button>
+            </div>
+            <div id="positions-wrapper" class="table-wrapper">
+              <div style="overflow-x: auto">
+                <table class="data-table" id="positions-table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Vol</th>
+                      <th>Open</th>
+                      <th>Current</th>
+                      <th>SL</th>
+                      <th>TP</th>
+                      <th>Profit</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
               </div>
             </div>
           </div>
 
           <div class="section-container">
-            <h2 style="font-size: 16px; margin: 0 0 15px 0">Open Positions</h2>
-            <table class="data-table" id="positions-table">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Vol</th>
-                  <th>Open</th>
-                  <th>Current</th>
-                  <th>SL</th>
-                  <th>TP</th>
-                  <th>Profit</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-
-          <div class="section-container">
-            <h2 style="font-size: 16px; margin: 0 0 15px 0">Trade History</h2>
-            <table class="data-table" id="history-table">
-              <thead>
-                <tr>
-                  <th>TIME</th>
-                  <th>SYMBOL</th>
-                  <th>TYPE</th>
-                  <th>VOL</th>
-                  <th>PRICE</th>
-                  <th>PROFIT</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+            <div
+              class="section-header"
+              onclick="toggleSection('history-wrapper', this)"
+            >
+              <h2 style="font-size: 16px">History</h2>
+              <button class="btn-collapse">▼</button>
+            </div>
+            <div id="history-wrapper" class="table-wrapper">
+              <div style="overflow-x: auto">
+                <table class="data-table" id="history-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Symbol</th>
+                      <th>Type</th>
+                      <th>Vol</th>
+                      <th>Price</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       </main>
@@ -167,21 +180,17 @@
       </div>
     </div>
 
-    <script src="dashboard.js"></script>
     <div id="account-modal" class="modal-overlay" style="display: none">
       <div class="modal-box">
         <div class="modal-header">
           <h3>Manage Accounts</h3>
           <button class="btn-icon" onclick="closeAccountModal()">×</button>
         </div>
-
         <div class="modal-body">
           <div id="account-list-container"></div>
-
           <button class="btn-add-main" onclick="showAddAccountForm()">
             + Link New Trading Account
           </button>
-
           <div id="account-form" class="form-panel" style="display: none">
             <div
               style="
@@ -194,70 +203,38 @@
                 Add Account
               </h4>
             </div>
-
             <input type="hidden" id="inp-acc-id" />
-
             <div class="form-grid">
               <div class="input-group">
-                <label>Account Name</label>
-                <input
-                  type="text"
-                  id="inp-name"
-                  placeholder="My Personal Acc"
-                  class="styled-input"
-                />
+                <label>Account Name</label
+                ><input type="text" id="inp-name" class="styled-input" />
               </div>
               <div class="input-group">
-                <label>Login ID</label>
-                <input
-                  type="number"
-                  id="inp-login"
-                  placeholder="12345678"
-                  class="styled-input"
-                />
+                <label>Login ID</label
+                ><input type="number" id="inp-login" class="styled-input" />
               </div>
               <div class="input-group">
-                <label>Broker Server</label>
-                <input
-                  type="text"
-                  id="inp-server"
-                  placeholder="Samco-Demo"
-                  class="styled-input"
-                />
+                <label>Broker Server</label
+                ><input type="text" id="inp-server" class="styled-input" />
               </div>
               <div class="input-group">
-                <label>Password</label>
-                <input
-                  type="password"
-                  id="inp-pass"
-                  placeholder="••••••••"
-                  class="styled-input"
-                />
+                <label>Password</label
+                ><input type="password" id="inp-pass" class="styled-input" />
               </div>
-
               <div class="input-group" style="grid-column: 1 / -1">
-                <label>Terminal Path (.exe)</label>
-                <input
-                  type="text"
-                  id="inp-path"
-                  placeholder="C:\Program Files\MetaTrader 5\terminal64.exe"
-                  class="styled-input"
-                />
+                <label>Terminal Path (.exe)</label
+                ><input type="text" id="inp-path" class="styled-input" />
               </div>
             </div>
-
             <div class="config-section">
               <div class="config-header">
-                <label style="color: #8a94a6; font-size: 11px; font-weight: 700"
-                  >Symbol Rules (Volume)</label
-                >
-                <button class="btn-dashed" onclick="addSymbolConfigRow()">
+                <label>Symbol Rules</label
+                ><button class="btn-dashed" onclick="addSymbolConfigRow()">
                   + Add Rule
                 </button>
               </div>
               <div id="symbol-config-list"></div>
             </div>
-
             <div
               style="
                 margin-top: 25px;
@@ -267,9 +244,8 @@
               "
             >
               <button class="btn-secondary" onclick="hideAccountForm()">
-                Cancel
-              </button>
-              <button class="btn-primary" onclick="saveAccountToDb()">
+                Cancel</button
+              ><button class="btn-primary" onclick="saveAccountToDb()">
                 Save Account
               </button>
             </div>
@@ -277,5 +253,7 @@
         </div>
       </div>
     </div>
+
+    <script src="dashboard.js"></script>
   </body>
 </html>

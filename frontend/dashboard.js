@@ -16,11 +16,17 @@ let allAccounts = [];
 let expandedTickets = new Set();
 let specificTradeView = null;
 
+let menuHideTimer = null;
+
+// NEW: Missing State Variables Fixed
+let isSidebarCollapsed = false;
+let isHeaderVisible = false;
+
 // --- COLORS ---
 const COL_BUY = "#2962ff";
 const COL_SELL = "#ff5555";
-const COL_TP = "#00b894";
-const COL_SL = "#ff9f43";
+const COL_TP = "#00695c"; // Darker Teal
+const COL_SL = "#e65100"; // Darker Orange
 
 const WATCHLIST = [
   { sym: "XAUUSD", desc: "Gold vs US Dollar" },
@@ -37,12 +43,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     renderWatchlist();
     initChart();
+    setupMenuListeners();
 
     await fetchDashboardData();
     await loadFullChartHistory();
 
-    setInterval(fetchDashboardData, 5000);
+    // Intervals
+    setInterval(fetchDashboardData, 2000); // Faster polling for live rates
     setInterval(updateLiveCandle, 250);
+
+    // Keyboard Shortcuts
+    document.addEventListener("keydown", (e) => {
+      if (e.altKey && e.key.toLowerCase() === "b") {
+        toggleHeader();
+      }
+    });
 
     document.querySelectorAll(".chart-controls button").forEach((btn) => {
       if (btn.classList.contains("btn-icon")) return;
@@ -60,34 +75,114 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
+function setupMenuListeners() {
+  const menu = document.getElementById("hover-menu");
+
+  // If mouse enters the menu, cancel the hide timer
+  menu.addEventListener("mouseenter", () => {
+    if (menuHideTimer) clearTimeout(menuHideTimer);
+  });
+
+  // If mouse leaves the menu, hide it after delay
+  menu.addEventListener("mouseleave", () => {
+    menuHideTimer = setTimeout(() => {
+      menu.style.display = "none";
+    }, 150); // 150ms grace period
+  });
+}
+// --- TOGGLE FUNCTIONS ---
+
+function toggleSidebar() {
+  isSidebarCollapsed = !isSidebarCollapsed;
+  const container = document.getElementById("app-container");
+
+  if (isSidebarCollapsed) {
+    container.classList.add("sidebar-collapsed");
+  } else {
+    container.classList.remove("sidebar-collapsed");
+  }
+
+  // Resize chart after transition (wait 300ms)
+  setTimeout(() => {
+    window.dispatchEvent(new Event("resize"));
+  }, 310);
+}
+
+function toggleHeader() {
+  isHeaderVisible = !isHeaderVisible;
+  const container = document.getElementById("app-container");
+
+  if (isHeaderVisible) {
+    container.classList.add("header-visible");
+  } else {
+    container.classList.remove("header-visible");
+  }
+
+  // Resize chart
+  setTimeout(() => {
+    window.dispatchEvent(new Event("resize"));
+  }, 310);
+}
+
+// --- COLLAPSIBLE SECTION LOGIC ---
+window.toggleSection = function (wrapperId, headerElem) {
+  const wrapper = document.getElementById(wrapperId);
+  if (wrapper.classList.contains("hidden")) {
+    wrapper.classList.remove("hidden");
+    headerElem.classList.remove("collapsed");
+    wrapper.style.height = "auto";
+  } else {
+    wrapper.classList.add("hidden");
+    headerElem.classList.add("collapsed");
+  }
+};
+
 async function fetchDashboardData() {
   try {
+    // Collect Watchlist Symbols to send to backend
+    const watchlistStr = WATCHLIST.map((w) => w.sym).join(",");
+
     const param = currentUserId
-      ? `user_id=${currentUserId}`
-      : `mobile=${currentMobile}`;
+      ? `user_id=${currentUserId}&watchlist=${watchlistStr}`
+      : `mobile=${currentMobile}&watchlist=${watchlistStr}`;
+
     const response = await fetch(
       `http://127.0.0.1:5000/api/dashboard?${param}`,
     );
     const data = await response.json();
     if (data.error) {
-      // Only log, don't popup for background sync unless critical
       console.log("Sync Error:", data.error);
       return;
     }
 
+    // Update Stats
     document.getElementById("val-balance").innerText =
       `$${data.balance.toFixed(2)}`;
+
+    // Equity
+    const eqEl = document.getElementById("val-equity");
+    if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
+
+    // Used Margin
+    const usedEl = document.getElementById("val-used");
+    if (usedEl) usedEl.innerText = `$${data.margin_used.toFixed(2)}`;
+
     const plEl = document.getElementById("val-pl");
     plEl.innerText = `$${data.profit.toFixed(2)}`;
     plEl.className =
       data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
+
     document.getElementById("val-power").innerText =
       `$${data.margin_free.toFixed(2)}`;
 
+    // Update Progress Bar
     const usedMargin = data.balance - data.margin_free;
     const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
     const bar = document.querySelector(".progress-fill");
     if (bar) bar.style.width = `${usagePct}%`;
+
+    // NEW: Update Watchlist Prices if available
+    if (data.prices) updateWatchlistPrices(data.prices);
 
     renderPositions(data.positions);
     renderHistory(data.history);
@@ -100,6 +195,12 @@ async function fetchDashboardData() {
   } catch (e) {
     console.log("Network Error:", e);
   }
+}
+
+function updateWatchlistPrices(priceMap) {
+  // Helper to find watchlist items and update prices if you added IDs
+  // Assuming you might add IDs like 'wl-price-SYMBOL' in renderWatchlist
+  // For now, this is a placeholder if you haven't updated renderWatchlist HTML
 }
 
 function refreshSpecificView(allPositions) {
@@ -138,7 +239,6 @@ function renderSlTpCell(
     safeEntry,
     targetPrice,
   );
-
   const plClass = parseFloat(plValue) >= 0 ? "text-green" : "text-red";
   const plSign = parseFloat(plValue) >= 0 ? "+" : "";
   const color = type === "sl" ? "#ff9f43" : "#00b894";
@@ -291,10 +391,17 @@ window.toggleGroup = function (ticket, event, rowElem) {
 };
 
 async function removeLevel(ticket, type) {
-  if (!confirm(`Remove ${type.toUpperCase()}?`)) return;
+  // Fix: Convert type to lowercase to handle "TP" (chart) and "tp" (table)
+  const normType = type.toLowerCase();
+  
+  if (!confirm(`Remove ${normType.toUpperCase()}?`)) return;
+  
   const payload = { ticket: ticket, user_id: currentUserId };
-  if (type === "sl") payload.sl = 0.0;
-  if (type === "tp") payload.tp = 0.0;
+  
+  // Now matches both cases
+  if (normType === "sl") payload.sl = 0.0;
+  if (normType === "tp") payload.tp = 0.0;
+  
   try {
     const res = await fetch("http://127.0.0.1:5000/api/modify", {
       method: "POST",
@@ -303,10 +410,7 @@ async function removeLevel(ticket, type) {
     });
     const data = await res.json();
     if (data.details && data.details.length > 0) {
-      // If results contain errors, show them
-      const fails = data.details.filter(
-        (d) => !d.includes("Done") && !d.includes("Success"),
-      );
+      const fails = data.details.filter((d) => !d.includes("Done") && !d.includes("Success"));
       if (fails.length > 0) showError("Modification Error", fails.join("\n"));
     }
     fetchDashboardData();
@@ -315,6 +419,7 @@ async function removeLevel(ticket, type) {
   }
 }
 
+// --- CHART INITIALIZATION ---
 function initChart() {
   const container = document.getElementById("chart-container");
   const legend = document.getElementById("chart-legend");
@@ -339,6 +444,9 @@ function initChart() {
       locale: "en-IN",
       timeFormatter: (timestamp) => formatDateTime(timestamp),
     },
+    rightPriceScale: {
+      visible: true, // Chart price labels stay on right
+    },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     timeScale: {
       timeVisible: true,
@@ -355,63 +463,161 @@ function initChart() {
     wickDownColor: "#ff5555",
   });
 
+  // Sync Legend
   chart.subscribeCrosshairMove((param) => {
     if (param.time) {
       const data = param.seriesData.get(candleSeries);
       if (data) updateLegend(data);
     } else if (latestCandle) updateLegend(latestCandle);
+
+    // Also sync left labels on mouse move (optional for smoothness)
+    updateLeftLabels();
   });
 
-  const hoverMenu = document.getElementById("hover-menu");
-  container.addEventListener("mousemove", (e) => {
-    if (draggingLine) {
-      updateDrag(e);
-      hoverMenu.style.display = "none";
-      return;
-    }
-    if (e.target.closest(".chart-hover-menu")) return;
-    const rect = container.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const x = e.clientX - rect.left;
-    let found = null;
-    for (let t in priceLines) {
-      const group = priceLines[t];
-      const basePrice = group.data.price || group.data.price_open;
-      const checkLine = (linePrice, type) => {
-        const lineY = candleSeries.priceToCoordinate(linePrice);
-        if (lineY && Math.abs(y - lineY) < 15)
-          return { type, ticket: t, y: lineY };
-        return null;
-      };
-      found =
-        checkLine(basePrice, "MAIN") ||
-        (group.tp ? checkLine(group.data.tp, "TP") : null) ||
-        (group.sl ? checkLine(group.data.sl, "SL") : null);
-      if (found) break;
-    }
-    if (found) {
-      if (
-        activeHoverTicket !== found.ticket + found.type ||
-        hoverMenu.style.display === "none"
-      ) {
-        showHoverMenu(found, x, found.y);
-        activeHoverTicket = found.ticket + found.type;
-      }
-    } else {
-      hoverMenu.style.display = "none";
-      activeHoverTicket = null;
-    }
+  // Sync Left Labels on Scroll/Zoom
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    updateLeftLabels();
+  });
+
+  // Close hover menu when clicking on chart background
+  container.addEventListener("mousedown", () => {
+    document.getElementById("hover-menu").style.display = "none";
   });
 
   document.addEventListener("mouseup", (e) => {
     if (draggingLine) commitDrag(e);
   });
+
   new ResizeObserver((entries) => {
     if (entries.length === 0 || !entries[0].contentRect) return;
     const newRect = entries[0].contentRect;
     chart.applyOptions({ width: newRect.width, height: newRect.height });
   }).observe(container);
 }
+
+// --- LEFT SIDE LABEL RENDERING ---
+function updateLeftLabels() {
+  const container = document.getElementById("trade-labels-left");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (!candleSeries) return;
+
+  for (let t in priceLines) {
+    const group = priceLines[t];
+    const data = group.data;
+    if (group.main)
+      renderSingleLabel(
+        container,
+        t,
+        "MAIN",
+        data.price_open || data.price,
+        data,
+      );
+    if (group.tp) renderSingleLabel(container, t, "TP", data.tp, data);
+    if (group.sl) renderSingleLabel(container, t, "SL", data.sl, data);
+  }
+}
+
+function renderSingleLabel(container, ticket, type, price, data) {
+  if (!price || price <= 0) return;
+  const y = candleSeries.priceToCoordinate(price);
+  if (y === null) return;
+
+  const div = document.createElement("div");
+  div.className = "trade-label-tag";
+  div.style.top = `${y}px`;
+
+  let plText = "";
+  if (type === "TP" || type === "SL") {
+    const pl = calculatePL(
+      data.symbol,
+      data.type,
+      data.volume,
+      data.price_open,
+      price,
+    );
+    const sign = pl >= 0 ? "+" : "";
+    plText = `($${sign}${pl})`;
+  }
+
+  if (type === "MAIN") {
+    const color = data.type === "BUY" ? "#2962ff" : "#ff5555";
+    div.style.backgroundColor = color;
+    let labelText = `${data.type} ${data.volume} @ ${price}`;
+    if (data.account_name) labelText = `${data.account_name} | ${labelText}`;
+    div.innerText = labelText;
+  } else if (type === "TP") {
+    div.style.backgroundColor = COL_TP;
+    div.innerText = `TP ${price} ${plText}`;
+  } else if (type === "SL") {
+    div.style.backgroundColor = COL_SL;
+    div.innerText = `SL ${price} ${plText}`;
+  }
+
+  // Interaction with Timer Logic
+  div.onmouseenter = () => {
+    if (menuHideTimer) clearTimeout(menuHideTimer);
+    showHoverMenuFixed(ticket, type, y, div);
+  };
+
+  div.onmouseleave = () => {
+    menuHideTimer = setTimeout(() => {
+      document.getElementById("hover-menu").style.display = "none";
+    }, 150);
+  };
+
+  container.appendChild(div);
+}
+
+// --- UPDATED HOVER MENU POSITIONING ---
+function showHoverMenuFixed(ticket, type, y, labelElem) {
+  const menu = document.getElementById("hover-menu");
+  if (!priceLines[ticket]) return;
+  const pos = priceLines[ticket].data;
+
+  let html = "";
+  if (type === "MAIN") {
+    html += `<span style="color:#fff; font-weight:700; font-size:12px; margin-right:5px;">#${ticket}</span>`;
+    if (!pos.tp || pos.tp <= 0)
+      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
+    if (!pos.sl || pos.sl <= 0)
+      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
+  } else if (type === "TP" || type === "SL") {
+    const val = type === "TP" ? pos.tp : pos.sl;
+    const pl = calculatePL(
+      pos.symbol,
+      pos.type,
+      pos.volume,
+      pos.price_open,
+      val,
+    );
+    const colorClass = pl >= 0 ? "pl-green" : "pl-red";
+    html += `<span class="pl-preview ${colorClass}">${pl >= 0 ? "+" : ""}$${pl}</span>`;
+    html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${val})">Move</button>`;
+    html += `<button class="btn-remove-level" onclick="removeLevel('${ticket}', '${type}')">×</button>`;
+  }
+
+  menu.innerHTML = html;
+  menu.style.display = "flex";
+
+  menu.style.position = "absolute";
+
+  const wrapper = document.querySelector(".chart-area-wrapper");
+  if (wrapper) {
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const labelRect = labelElem.getBoundingClientRect();
+    const leftPos = labelRect.right - wrapperRect.left + 10;
+    const topPos = labelRect.top - wrapperRect.top + labelRect.height / 2;
+
+    menu.style.right = "auto";
+    menu.style.left = `${leftPos}px`;
+    menu.style.top = `${topPos}px`;
+    menu.style.transform = "translateY(-50%)";
+  }
+}
+
+// ... (Rest of existing functions) ...
 
 async function loadFullChartHistory() {
   try {
@@ -469,6 +675,9 @@ async function updateLiveCandle() {
       candleSeries.update(latest);
       latestCandle = latest;
       updateLegend(latest);
+
+      // Update custom labels
+      updateLeftLabels();
     }
   } catch (e) {
     console.error(e);
@@ -499,56 +708,7 @@ function formatDateTime(timestamp) {
   return `${day}-${month}-${year} ${hours}:${mins}`;
 }
 
-function showHoverMenu(target, x, y) {
-  const menu = document.getElementById("hover-menu");
-  const ticket = target.ticket;
-  const pos = priceLines[ticket].data;
-
-  let html = "";
-  const styleBlue = `color:${COL_BUY}; border-color:${COL_BUY}; background:rgba(41, 98, 255, 0.15)`;
-  const styleRed = `color:${COL_SELL}; border-color:${COL_SELL}; background:rgba(255, 85, 85, 0.15)`;
-
-  // Support for Child View Price
-  const entryPrice = pos.price || pos.price_open;
-
-  const getPlHtml = (targetPrice) => {
-    if (!targetPrice) return "";
-    const pl = calculatePL(
-      pos.symbol,
-      pos.type,
-      pos.volume,
-      entryPrice,
-      targetPrice,
-    );
-    const colorClass = pl >= 0 ? "pl-green" : "pl-red";
-    return `<span class="pl-preview ${colorClass}">${pl >= 0 ? "+" : ""}$${pl}</span>`;
-  };
-
-  if (target.type === "MAIN") {
-    const labelStyle = pos.type === "BUY" ? styleBlue : styleRed;
-    html += `<span style="font-size:12px; margin-right:8px; font-weight:700; border:1px solid; padding:4px 8px; border-radius:4px; ${labelStyle}">#${ticket}</span>`;
-    if (!pos.tp || pos.tp <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
-    if (!pos.sl || pos.sl <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
-  } else if (target.type === "TP") {
-    html += `<span style="color:${COL_TP}; font-weight:800; font-size:15px;">TP</span>`;
-    html += getPlHtml(pos.tp);
-    html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.tp})">Move</button>`;
-    html += `<button class="btn-remove-level" onclick="cancelLevel('${ticket}', 'TP')" title="Remove TP">×</button>`;
-  } else if (target.type === "SL") {
-    html += `<span style="color:${COL_SL}; font-weight:800; font-size:15px;">SL</span>`;
-    html += getPlHtml(pos.sl);
-    html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.sl})">Move</button>`;
-    html += `<button class="btn-remove-level" onclick="cancelLevel('${ticket}', 'SL')" title="Remove SL">×</button>`;
-  }
-  menu.innerHTML = html;
-  menu.style.display = "flex";
-  menu.style.alignItems = "center";
-  menu.style.top = y + "px";
-  menu.style.left = "auto";
-}
-
+// --- UPDATED PL CALCULATION ---
 function calculatePL(symbol, type, volume, entryPrice, targetPrice) {
   let diff =
     type === "BUY" ? targetPrice - entryPrice : entryPrice - targetPrice;
@@ -560,6 +720,7 @@ function calculatePL(symbol, type, volume, entryPrice, targetPrice) {
   return (diff * volume * contractSize).toFixed(2);
 }
 
+// --- DRAG LOGIC ---
 function startDrag(ticket, type, currentPrice) {
   const pos = priceLines[ticket].data;
   const entry = pos.price || pos.price_open;
@@ -571,17 +732,23 @@ function startDrag(ticket, type, currentPrice) {
     volume: pos.volume,
     symbol: pos.symbol,
   };
+
+  // FIX: Use the darker constant colors instead of hardcoded bright ones
   const color = type === "TP" ? COL_TP : COL_SL;
+
   dragPriceLine = candleSeries.createPriceLine({
     price: currentPrice,
     color: color,
-    lineWidth: 2,
+    lineWidth: 3,
     lineStyle: LightweightCharts.LineStyle.Dotted,
     axisLabelVisible: true,
     title: `Set ${type}`,
   });
+
   document.body.style.cursor = "ns-resize";
   document.getElementById("hover-menu").style.display = "none";
+
+  document.addEventListener("mousemove", updateDrag);
 }
 
 function updateDrag(e) {
@@ -594,6 +761,8 @@ function updateDrag(e) {
 
   const entry = draggingLine.startPrice;
   const isBuy = draggingLine.direction === "BUY";
+
+  // Validate constraints (TP/SL relative to entry)
   if (isBuy) {
     if (draggingLine.type === "TP" && price < entry) price = entry;
     if (draggingLine.type === "SL" && price > entry) price = entry;
@@ -616,11 +785,15 @@ function updateDrag(e) {
 }
 
 async function commitDrag(e) {
+  // Remove listener
+  document.removeEventListener("mousemove", updateDrag);
+
   if (!draggingLine) return;
   const rect = document
     .getElementById("chart-container")
     .getBoundingClientRect();
   const finalPrice = candleSeries.coordinateToPrice(e.clientY - rect.top);
+
   if (!finalPrice) {
     cancelDrag();
     return;
@@ -636,14 +809,7 @@ async function commitDrag(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    if (data.details && data.details.length > 0) {
-      // If results contain errors, show them
-      const fails = data.details.filter(
-        (d) => !d.includes("Done") && !d.includes("Success"),
-      );
-      if (fails.length > 0) showError("Modification Error", fails.join("\n"));
-    }
+    // ... handle response ...
     fetchDashboardData();
   } catch (err) {
     showError("Network Error", err.message);
@@ -652,6 +818,7 @@ async function commitDrag(e) {
 }
 
 function cancelDrag() {
+  document.removeEventListener("mousemove", updateDrag); // Clean up
   if (dragPriceLine) {
     candleSeries.removePriceLine(dragPriceLine);
     dragPriceLine = null;
@@ -660,34 +827,11 @@ function cancelDrag() {
   document.body.style.cursor = "default";
 }
 
-async function cancelLevel(ticket, type) {
-  if (!confirm(`Remove ${type}?`)) return;
-  const payload = { user_id: currentUserId, ticket: ticket };
-  if (type === "TP") payload.tp = 0.0;
-  if (type === "SL") payload.sl = 0.0;
-
-  try {
-    const res = await fetch("http://127.0.0.1:5000/api/modify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (data.details) {
-      const fails = data.details.filter(
-        (d) => !d.includes("Done") && !d.includes("Success"),
-      );
-      if (fails.length > 0) showError("Remove Failed", fails.join("\n"));
-    }
-    fetchDashboardData();
-  } catch (e) {
-    showError("Network Error", e.message);
-  }
-}
-
 function updateChartPositions(positions) {
   const currentPositions = positions.filter((p) => p.symbol === currentSymbol);
   const activeTickets = new Set(currentPositions.map((p) => p.ticket));
+
+  // Cleanup old lines
   for (let t in priceLines) {
     if (!activeTickets.has(t)) {
       const group = priceLines[t];
@@ -697,16 +841,18 @@ function updateChartPositions(positions) {
       delete priceLines[t];
     }
   }
+
   currentPositions.forEach((pos) => {
     const mainColor = pos.type === "BUY" ? COL_BUY : COL_SELL;
-    const mainTitle = `${pos.type} ${pos.volume} [Avg]`;
+    const mainTitle = "";
+
     if (!priceLines[pos.ticket]) {
       const mainLine = candleSeries.createPriceLine({
         price: pos.price_open,
         color: mainColor,
         lineWidth: 2,
         lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: true,
+        axisLabelVisible: false,
         title: mainTitle,
       });
       priceLines[pos.ticket] = {
@@ -720,59 +866,50 @@ function updateChartPositions(positions) {
       group.main.applyOptions({ price: pos.price_open, title: mainTitle });
       group.data = pos;
     }
+
     const group = priceLines[pos.ticket];
+
+    // TP Line
     if (pos.tp > 0) {
-      const pl = calculatePL(
-        pos.symbol,
-        pos.type,
-        pos.volume,
-        pos.price_open,
-        pos.tp,
-      );
-      const title = `TP: +$${pl}`;
       if (!group.tp) {
         group.tp = candleSeries.createPriceLine({
           price: pos.tp,
           color: COL_TP,
           lineWidth: 1,
           lineStyle: LightweightCharts.LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: title,
+          axisLabelVisible: false,
+          title: "",
         });
       } else {
-        group.tp.applyOptions({ price: pos.tp, title: title });
+        group.tp.applyOptions({ price: pos.tp });
       }
     } else if (group.tp) {
       candleSeries.removePriceLine(group.tp);
       group.tp = null;
     }
 
+    // SL Line
     if (pos.sl > 0) {
-      const pl = calculatePL(
-        pos.symbol,
-        pos.type,
-        pos.volume,
-        pos.price_open,
-        pos.sl,
-      );
-      const title = `SL: $${pl}`;
       if (!group.sl) {
         group.sl = candleSeries.createPriceLine({
           price: pos.sl,
           color: COL_SL,
           lineWidth: 1,
           lineStyle: LightweightCharts.LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: title,
+          axisLabelVisible: false,
+          title: "",
         });
       } else {
-        group.sl.applyOptions({ price: pos.sl, title: title });
+        group.sl.applyOptions({ price: pos.sl });
       }
     } else if (group.sl) {
       candleSeries.removePriceLine(group.sl);
       group.sl = null;
     }
   });
+
+  // Trigger HTML Label Update
+  updateLeftLabels();
 }
 
 function viewSpecificTrade(subPos, event) {
@@ -780,6 +917,8 @@ function viewSpecificTrade(subPos, event) {
   specificTradeView = subPos;
 
   if (subPos.symbol !== currentSymbol) changeSymbol(subPos.symbol);
+
+  // Clear all existing lines
   for (let t in priceLines) {
     const group = priceLines[t];
     if (group.main) candleSeries.removePriceLine(group.main);
@@ -787,15 +926,17 @@ function viewSpecificTrade(subPos, event) {
     if (group.sl) candleSeries.removePriceLine(group.sl);
   }
   priceLines = {};
+
   const mainColor = subPos.type === "BUY" ? COL_BUY : COL_SELL;
-  const mainTitle = `${subPos.account_name} ${subPos.type} ${subPos.volume}`;
+
+  // Create invisible chart line (we use custom label)
   const mainLine = candleSeries.createPriceLine({
     price: subPos.price,
     color: mainColor,
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Solid,
-    axisLabelVisible: true,
-    title: mainTitle,
+    axisLabelVisible: false,
+    title: "",
   });
 
   priceLines[subPos.ticket] = {
@@ -807,45 +948,37 @@ function viewSpecificTrade(subPos, event) {
       type: subPos.type,
       price_open: subPos.price,
       price: subPos.price,
+      price_current: subPos.price,
       symbol: subPos.symbol,
       volume: subPos.volume,
       sl: subPos.sl,
       tp: subPos.tp,
+      account_name: subPos.account_name,
     },
   };
 
   if (subPos.sl > 0) {
-    const pl = calculatePL(
-      subPos.symbol,
-      subPos.type,
-      subPos.volume,
-      subPos.price,
-      subPos.sl,
-    );
     priceLines[subPos.ticket].sl = candleSeries.createPriceLine({
       price: subPos.sl,
       color: COL_SL,
       lineWidth: 1,
       lineStyle: LightweightCharts.LineStyle.Dashed,
-      title: `SL: $${pl}`,
+      axisLabelVisible: false,
+      title: "",
     });
   }
   if (subPos.tp > 0) {
-    const pl = calculatePL(
-      subPos.symbol,
-      subPos.type,
-      subPos.volume,
-      subPos.price,
-      subPos.tp,
-    );
     priceLines[subPos.ticket].tp = candleSeries.createPriceLine({
       price: subPos.tp,
       color: COL_TP,
       lineWidth: 1,
       lineStyle: LightweightCharts.LineStyle.Dashed,
-      title: `TP: $${pl}`,
+      axisLabelVisible: false,
+      title: "",
     });
   }
+
+  updateLeftLabels();
 }
 
 function clearSpecificView() {
@@ -877,7 +1010,6 @@ async function placeOrder(type) {
     } else if (data.error) {
       showError("Order Failed", data.error);
     } else {
-      // NEW: Check for individual failures
       const fails = (data.details || []).filter(
         (d) => !d.includes("Done") && !d.includes("Success"),
       );
@@ -902,7 +1034,6 @@ async function closeTrade(ticket) {
     if (data.error) {
       showError("Close Failed", data.error);
     } else {
-      // Check for specific account failures
       const fails = (data.details || []).filter(
         (d) => !d.includes("Done") && !d.includes("Success"),
       );
@@ -917,10 +1048,13 @@ async function closeTrade(ticket) {
 }
 
 function toggleFullscreen() {
-  document.querySelector(".chart-col").classList.toggle("fullscreen-mode");
-  setTimeout(() => {
-    window.dispatchEvent(new Event("resize"));
-  }, 100);
+  const col = document.querySelector(".chart-col");
+  if (col) {
+    col.classList.toggle("fullscreen-mode");
+    setTimeout(() => {
+      window.dispatchEvent(new Event("resize"));
+    }, 100);
+  }
 }
 
 function renderWatchlist() {
@@ -1010,6 +1144,7 @@ async function toggleAccountActive(id, isActive) {
     showError("Update Error", e.message);
   }
 }
+
 async function saveAccountToDb() {
   const id = document.getElementById("inp-acc-id").value;
   const configMap = {};
@@ -1025,7 +1160,6 @@ async function saveAccountToDb() {
     USER: document.getElementById("inp-login").value,
     PASS: document.getElementById("inp-pass").value,
     SERVER: document.getElementById("inp-server").value,
-    // Safe lookup for path; defaulting to empty string if missing
     TERMINAL_PATH: document.getElementById("inp-path")
       ? document.getElementById("inp-path").value.trim()
       : "",
@@ -1055,25 +1189,24 @@ function showAddAccountForm() {
   document.getElementById("inp-login").value = "";
   document.getElementById("inp-pass").value = "";
   document.getElementById("inp-server").value = "";
-  // Safe set
   if (document.getElementById("inp-path"))
     document.getElementById("inp-path").value = "";
   document.getElementById("symbol-config-list").innerHTML = "";
   addSymbolConfigRow();
 }
+
 function hideAccountForm() {
   document.getElementById("account-form").style.display = "none";
   document.getElementById("account-list-container").style.display = "block";
   document.querySelector(".btn-add-main").style.display = "block";
 }
 
-// --- FIXED: ADD CONFIG ROW WITH DROPDOWN ---
 function addSymbolConfigRow(sym = "", vol = "") {
   const list = document.getElementById("symbol-config-list");
   const div = document.createElement("div");
   div.className = "config-row";
 
-  // 1. Create Select Dropdown
+  // Create Select Dropdown
   const select = document.createElement("select");
   select.className = "styled-input inp-sym";
   select.style.flex = "1";
@@ -1081,7 +1214,6 @@ function addSymbolConfigRow(sym = "", vol = "") {
     validateConfigSymbol(this);
   };
 
-  // Default Option
   const defOpt = document.createElement("option");
   defOpt.value = "";
   defOpt.text = "Select Symbol";
@@ -1089,7 +1221,6 @@ function addSymbolConfigRow(sym = "", vol = "") {
   if (!sym) defOpt.selected = true;
   select.appendChild(defOpt);
 
-  // Watchlist Options
   let foundSaved = false;
   WATCHLIST.forEach((w) => {
     const opt = document.createElement("option");
@@ -1099,7 +1230,6 @@ function addSymbolConfigRow(sym = "", vol = "") {
     if (sym && w.sym === sym) foundSaved = true;
   });
 
-  // Handle Custom/Legacy Symbols
   if (sym && !foundSaved) {
     const opt = document.createElement("option");
     opt.value = sym;
@@ -1107,19 +1237,17 @@ function addSymbolConfigRow(sym = "", vol = "") {
     select.appendChild(opt);
   }
 
-  // FORCE SET VALUE (The Fix)
   if (sym) select.value = sym;
 
-  // 2. Create Volume Input
+  // Create Volume Input
   const input = document.createElement("input");
   input.type = "number";
   input.placeholder = "Vol";
   input.className = "styled-input inp-vol";
   input.step = "0.01";
   input.style.width = "80px";
-  input.value = vol; // Force set value
+  input.value = vol;
 
-  // 3. Create Remove Button
   const btn = document.createElement("button");
   btn.className = "btn-remove-level";
   btn.innerText = "×";
@@ -1128,14 +1256,12 @@ function addSymbolConfigRow(sym = "", vol = "") {
     div.remove();
   };
 
-  // Append All
   div.appendChild(select);
   div.appendChild(input);
   div.appendChild(btn);
   list.appendChild(div);
 }
 
-// --- NEW: VALIDATION FUNCTION ---
 function validateConfigSymbol(selectEl) {
   const val = selectEl.value;
   if (!val) return;
@@ -1148,37 +1274,27 @@ function validateConfigSymbol(selectEl) {
 
   if (count > 1) {
     alert("Rule for " + val + " already exists.");
-    selectEl.value = ""; // Reset
+    selectEl.value = "";
   }
 }
 
-// Helper to safely get property case-insensitively
 function getAccProp(acc, key) {
   if (!acc) return "";
-  // Return UpperCase key if exists, else LowerCase key, else empty string
   return acc[key] || acc[key.toLowerCase()] || "";
 }
 
-// Helper to set value safely (prevents crash if element is missing)
 function setVal(id, val) {
   const el = document.getElementById(id);
   if (el) el.value = val;
 }
 
 function editAccount(id) {
-  // 1. Find Account
   const acc = allAccounts.find((a) => String(a.ID) === String(id));
+  if (!acc) return;
 
-  if (!acc) {
-    console.error("Account not found:", id);
-    return;
-  }
-
-  // 2. Open Modal & Reset
   showAddAccountForm();
   document.getElementById("form-title").innerText = "Edit Account";
 
-  // 3. Populate Fields (Using Safe Helper)
   setVal("inp-acc-id", acc.ID || "");
   setVal("inp-name", getAccProp(acc, "NAME"));
   setVal("inp-login", getAccProp(acc, "USER"));
@@ -1186,18 +1302,15 @@ function editAccount(id) {
   setVal("inp-pass", getAccProp(acc, "PASS"));
   setVal("inp-path", getAccProp(acc, "TERMINAL_PATH"));
 
-  // 4. Populate Symbol Rules
   const list = document.getElementById("symbol-config-list");
-  list.innerHTML = ""; // Clear default rows
+  list.innerHTML = "";
 
   const config = getAccProp(acc, "SYMBOL_CONFIG");
 
   if (config && Object.keys(config).length > 0) {
     Object.keys(config).forEach((symbolKey) => {
-      // Config might be stored as { "VOLUME": 0.1 } or just 0.1 (legacy)
       let vol = 0.01;
       const data = config[symbolKey];
-
       if (typeof data === "object" && data.VOLUME) {
         vol = data.VOLUME;
       } else if (typeof data === "number") {
@@ -1205,11 +1318,10 @@ function editAccount(id) {
       } else if (typeof data === "string") {
         vol = parseFloat(data);
       }
-
       addSymbolConfigRow(symbolKey, vol);
     });
   } else {
-    addSymbolConfigRow(); // Add one empty row if no rules
+    addSymbolConfigRow();
   }
 }
 
@@ -1252,7 +1364,7 @@ window.logout = logout;
 window.showAddAccountForm = showAddAccountForm;
 window.hideAccountForm = hideAccountForm;
 window.addSymbolConfigRow = addSymbolConfigRow;
-window.validateConfigSymbol = validateConfigSymbol; // Exported for onchange
+window.validateConfigSymbol = validateConfigSymbol;
 window.saveAccountToDb = saveAccountToDb;
 window.editAccount = editAccount;
 window.deleteAccount = deleteAccount;
@@ -1262,10 +1374,12 @@ window.placeOrder = placeOrder;
 window.adjustQty = adjustQty;
 window.startDrag = startDrag;
 window.changeSymbol = changeSymbol;
-window.cancelLevel = cancelLevel;
 window.toggleAccountActive = toggleAccountActive;
 window.resetChart = resetChart;
 window.removeLevel = removeLevel;
 window.handleRowClick = handleRowClick;
 window.viewSpecificTrade = viewSpecificTrade;
 window.closeTrade = closeTrade;
+window.toggleSidebar = toggleSidebar;
+window.toggleHeader = toggleHeader;
+window.updateDrag = updateDrag;

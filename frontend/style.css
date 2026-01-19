@@ -158,9 +158,23 @@ button#loginBtn:active { transform: scale(0.98); }
 
 .app-container {
     display: grid;
-    grid-template-columns: 260px 1fr; /* Sidebar | Content */
-    grid-template-rows: 60px 1fr;     /* Navbar | Content */
-    height: 100vh; width: 100vw;
+    /* Default: Sidebar (260px) + Content */
+    grid-template-columns: 260px 1fr;
+    /* Default: Header (0px if hidden) + Content */
+    grid-template-rows: 0fr 1fr; 
+    height: 100vh;
+    width: 100vw;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* --- COLLAPSED STATE (Class added via JS) --- */
+.app-container.sidebar-collapsed {
+    grid-template-columns: 0px 1fr; /* Sidebar shrinks to 0 */
+}
+
+/* --- HEADER VISIBLE STATE (Class added via JS) --- */
+.app-container.header-visible {
+    grid-template-rows: 60px 1fr; /* Header expands */
 }
 
 /* NAVBAR */
@@ -172,6 +186,45 @@ button#loginBtn:active { transform: scale(0.98); }
     display: flex; align-items: center; justify-content: space-between;
     padding: 0 20px; z-index: 100;
 }
+
+/* --- TOP STATS BAR --- */
+.top-stats-bar {
+    grid-column: 1 / -1; /* Spans full width */
+    background: rgba(15, 20, 35, 0.95);
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    justify-content: center; /* Center the stats horizontally */
+    gap: 40px;
+    padding: 0 20px;
+    overflow: hidden; /* Hide content when height is 0 */
+    opacity: 0; /* Fade out when hidden */
+    transition: opacity 0.2s;
+}
+
+.app-container.header-visible .top-stats-bar {
+    opacity: 1;
+}
+
+.stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-white);
+    font-family: 'Inter', monospace;
+}
+
 .logo { font-weight: 800; font-size: 20px; color: var(--accent-cyan); letter-spacing: 0.5px; }
 
 /* SIDEBAR */
@@ -179,25 +232,76 @@ button#loginBtn:active { transform: scale(0.98); }
     background: rgba(15, 20, 34, 0.8);
     backdrop-filter: blur(10px);
     border-right: 1px solid var(--glass-border);
-    overflow-y: auto;
-    display: flex; flex-direction: column;
+    overflow: hidden; /* Important for collapsing */
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap; /* Prevent text wrapping during collapse */
+    position: relative;
+    z-index: 50;
 }
 .watchlist-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     padding: 15px 20px;
-    font-size: 13px; font-weight: 800; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 1px;
     border-bottom: 1px solid var(--glass-border);
 }
-.watchlist-item {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 14px 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.02);
-    cursor: pointer; transition: background 0.2s;
+
+.sidebar-toggle {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
 }
+.sidebar-toggle:hover { color: white; }
+
+/* EXPAND BUTTON (Floating) */
+.sidebar-expand-btn {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    z-index: 40;
+    background: rgba(15, 20, 35, 0.8);
+    border: 1px solid var(--glass-border);
+    color: var(--text-white);
+    width: 35px;
+    height: 35px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
+
+/* Show expand button ONLY when sidebar is collapsed */
+.app-container.sidebar-collapsed .sidebar-expand-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.watchlist-item {
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.wl-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+.wl-symbol { font-weight: 700; font-size: 14px; color: #fff; }
+.wl-price  { font-weight: 700; font-size: 14px; color: var(--accent-cyan); font-family: 'Inter', monospace; }
+.wl-desc   { font-size: 11px; color: var(--text-muted); }
+
 .watchlist-item:hover { background: rgba(255,255,255,0.03); }
 .watchlist-item.active { background: rgba(54, 215, 183, 0.1); border-left: 3px solid var(--accent-cyan); }
-.wl-symbol { font-weight: 700; font-size: 15px; color: #fff; }
-.wl-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
 /* CONTENT AREA */
 .main-content {
@@ -205,8 +309,8 @@ button#loginBtn:active { transform: scale(0.98); }
     padding: 20px;
     overflow-y: auto;
 }
-.dashboard-grid { display: flex; flex-direction: column; gap: 20px; }
-.top-row { display: flex; gap: 20px; height: 500px; }
+.dashboard-grid { display: flex; flex-direction: column; height: 100%; gap: 20px; }
+.top-row { display: none; }
 .stats-col { width: 250px; display: flex; flex-direction: column; gap: 15px; }
 
 /* SHARED CARDS */
@@ -242,13 +346,19 @@ button#loginBtn:active { transform: scale(0.98); }
 /* Trading Panel (Floating) */
 .trading-panel {
     position: absolute;
-    top: 70px; left: 50%; transform: translateX(-50%);
-    z-index: 50; display: flex; gap: 12px;
-    background: rgba(15, 20, 35, 0.95);
-    padding: 10px 20px; border-radius: 12px;
+    top: 50px;       /* Below the legend (which is at 15px) */
+    left: 15px;      /* Aligned left */
+    transform: none; /* Remove previous centering */
+    z-index: 40;
+    
+    display: flex; 
+    gap: 8px;
+    background: rgba(15, 20, 35, 0.8); /* Slightly more transparent */
+    padding: 6px 10px;
+    border-radius: 8px;
     border: 1px solid var(--glass-border);
-    backdrop-filter: blur(10px);
-    box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+    backdrop-filter: blur(5px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
 }
 
 /* Remove Number Spinners */
@@ -264,6 +374,33 @@ input[type=number] { -moz-appearance: textfield; }
 .btn-buy { background: var(--accent-cyan); color: #050810; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 800; cursor: pointer; font-size: 14px; transition: transform 0.1s; }
 .btn-sell { background: #ff5555; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 800; cursor: pointer; font-size: 14px; transition: transform 0.1s; }
 .btn-buy:active, .btn-sell:active { transform: scale(0.95); }
+
+.btn-buy, .btn-sell {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.qty-control input {
+    width: 40px;
+    font-size: 14px;
+}
+.qty-control button {
+    width: 20px;
+    font-size: 16px;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 15px;
+}
+
+.section-header h2 {
+    margin: 0; /* Remove default margin */
+}
 
 /* TABLES (Updated Fonts) */
 .section-container { margin-bottom: 0; padding: 25px; }
@@ -362,6 +499,25 @@ input[type=number] { -moz-appearance: textfield; }
     height: 100% !important;
 }
 
+.fullscreen-mode {
+    position: fixed !important;  /* Break out of the grid */
+    top: 0;
+    left: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 9999;               /* Layer on top of everything */
+    background-color: #0f1422;   /* Match your theme background to hide elements behind */
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+.fullscreen-mode .chart-area-wrapper {
+    flex: 1;
+    height: 100% !important;
+}
+
 /* MODALS */
 .modal-overlay {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -378,7 +534,18 @@ input[type=number] { -moz-appearance: textfield; }
 }
 #modal-title { color: #ff5555; font-weight: 700; font-size: 16px; }
 .close-btn { background: none; border: none; color: #8a94a6; font-size: 24px; cursor: pointer; }
-.modal-body { padding: 20px; }
+.modal-body {
+    padding: 20px;
+    max-height: 60vh;       /* Limit height to 60% of viewport */
+    overflow-y: auto;       /* Enable vertical scrolling */
+    overflow-x: hidden;
+}
+
+.modal-body::-webkit-scrollbar { width: 8px; }
+.modal-body::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+.modal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+.modal-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
 #modal-message {
     width: 100%; height: 150px; background: #0b0e1c; border: 1px solid rgba(255,255,255,0.1);
     border-radius: 8px; color: #e2e8f0; padding: 10px; font-family: monospace; font-size: 13px; resize: none; outline: none;
@@ -398,6 +565,30 @@ input[type=number] { -moz-appearance: textfield; }
 .btn-close-trade:hover {
     background: #ff5555;
     color: white;
+}
+
+.btn-collapse {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    transition: transform 0.3s;
+    cursor: pointer;
+}
+
+.collapsed .btn-collapse {
+    transform: rotate(-90deg);
+}
+
+.table-wrapper {
+    transition: height 0.3s ease, opacity 0.3s ease;
+    overflow: hidden;
+}
+
+.table-wrapper.hidden {
+    height: 0 !important;
+    opacity: 0;
+    margin: 0;
 }
 
 .btn-remove-level {
@@ -442,20 +633,13 @@ input[type=number] { -moz-appearance: textfield; }
 }
 
 .chart-hover-menu {
-    position: absolute;
-    display: none; /* Hidden by default */
     background: rgba(15, 20, 35, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 8px 12px;
     border-radius: 8px;
-    z-index: 100;
-    backdrop-filter: blur(5px);
-    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
-    pointer-events: auto; /* clickable */
-    transition: opacity 0.1s;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
     white-space: nowrap;
-    min-width: 140px;
-    justify-content: flex-end;
     font-family: 'Inter', sans-serif;
 }
 
@@ -466,12 +650,11 @@ input[type=number] { -moz-appearance: textfield; }
 
 #hover-menu {
     position: absolute;
-    /* Fixed to the right side (left of the Y-axis labels) */
-    right: 60px;
-    left: auto !important; /* Override JS left calculations */
+    /* REMOVED 'right: 60px' and 'left: auto' constraints */
+    /* JS will now control 'left' and 'top' fully */
     z-index: 100;
-    /* Vertically centered on the line (handled by JS top) */
     transform: translateY(-50%);
+    display: none; /* Hidden by default */
 }
 
 .hover-btn {
@@ -491,13 +674,14 @@ input[type=number] { -moz-appearance: textfield; }
 .hover-btn.is-close:hover { background: #ff5555; color: white; border-color: #ff5555; }
 
 .pl-preview {
-    font-size: 14px;
-    font-weight: 700;
-    margin-left: 6px;
-    margin-right: 8px;
-    padding: 3px 6px;
+    font-size: 16px !important;  /* Increased from 14px */
+    font-weight: 800;
+    margin-left: 8px;
+    margin-right: 12px;
+    padding: 4px 8px;
     border-radius: 4px;
     background: rgba(0,0,0,0.3);
+    letter-spacing: 0.5px;
 }
 .pl-green { color: #00b894; }
 .pl-red   { color: #ff5555; }
@@ -888,4 +1072,38 @@ select.styled-input {
     background-position: right 12px center;
     background-size: 10px;
     padding-right: 30px !important;
+}
+
+.trade-label-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 0; /* Won't block clicks on chart, labels will overflow visible */
+    z-index: 50;
+    pointer-events: none; /* Let clicks pass through empty space */
+}
+
+.trade-label-tag {
+    position: absolute;
+    left: 0;
+    transform: translateY(-50%);
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 800;
+    color: white;             /* White text now pops against darker backgrounds */
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    pointer-events: auto; 
+    box-shadow: 2px 2px 8px rgba(0,0,0,0.4);
+    white-space: nowrap;
+    transition: width 0.2s;
+    z-index: 51;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.2;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2); /* Added shadow for readability */
+}
+
+.trade-label-tag:hover {
+    padding-right: 20px;
 }

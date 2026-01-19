@@ -5,17 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="71aad98d-cfb3-4fe2-b356-87a4fd89dc3b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/backend/serviceAccountKey.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.bat" beforeDir="false" afterPath="$PROJECT_DIR$/build.bat" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/dashboard.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/dashboard.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/dashboard.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/dashboard.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/main.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/main.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/renderer.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/renderer.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/style.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/serviceAccountKey.json" beforeDir="false" afterPath="$PROJECT_DIR$/serviceAccountKey.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

@@ -16,6 +16,7 @@ function createWindow() {
         }
     });
 
+    mainWindow.removeMenu();
     mainWindow.loadFile('frontend/index.html');
 
     mainWindow.on('closed', function () {
