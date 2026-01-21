@@ -1107,3 +1107,47 @@ select.styled-input {
 .trade-label-tag:hover {
     padding-right: 20px;
 }
+
+.password-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.password-toggle {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    font-size: 16px;
+    opacity: 0.6;
+    user-select: none;
+    transition: opacity 0.2s;
+}
+
+.password-toggle:hover {
+    opacity: 1;
+    color: var(--accent-cyan);
+}
+
+.btn-loading {
+    color: transparent !important;
+    position: relative;
+    pointer-events: none; /* Disable clicks while loading */
+}
+
+.btn-loading::after {
+    content: "";
+    position: absolute;
+    width: 16px; height: 16px;
+    top: 50%; left: 50%;
+    margin-top: -8px; margin-left: -8px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

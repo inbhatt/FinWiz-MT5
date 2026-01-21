@@ -70,8 +70,11 @@ function startBackend() {
 
 // --- APP LIFECYCLE ---
 app.on('ready', () => {
+    const isDev = !app.isPackaged;
     // We do NOT run cleanup here to avoid killing the process we are about to start
-    startBackend();
+    if(!isDev){
+        startBackend();
+    }
     
     // Give Flask 2 seconds to initialize
     setTimeout(createWindow, 2000);

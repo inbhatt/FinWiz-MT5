@@ -7,7 +7,7 @@ let currentSymbol = "XAUUSD";
 let chart, candleSeries;
 let priceLines = {};
 let isErrorOpen = false;
-let currentTimeframe = "1H";
+let currentTimeframe = "1M";
 let latestCandle = null;
 let draggingLine = null;
 let dragPriceLine = null;
@@ -15,6 +15,8 @@ let activeHoverTicket = null;
 let allAccounts = [];
 let expandedTickets = new Set();
 let specificTradeView = null;
+
+let lastHoveredTime = null;
 
 let menuHideTimer = null;
 
@@ -74,6 +76,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     showError("Dashboard Crash", e.toString());
   }
 });
+
+function togglePassword() {
+    const inp = document.getElementById("inp-pass");
+    if (inp.type === "password") {
+        inp.type = "text";
+    } else {
+        inp.type = "password";
+    }
+}
 
 function setupMenuListeners() {
   const menu = document.getElementById("hover-menu");
@@ -139,9 +150,7 @@ window.toggleSection = function (wrapperId, headerElem) {
 
 async function fetchDashboardData() {
   try {
-    // Collect Watchlist Symbols to send to backend
     const watchlistStr = WATCHLIST.map((w) => w.sym).join(",");
-
     const param = currentUserId
       ? `user_id=${currentUserId}&watchlist=${watchlistStr}`
       : `mobile=${currentMobile}&watchlist=${watchlistStr}`;
@@ -150,38 +159,27 @@ async function fetchDashboardData() {
       `http://127.0.0.1:5000/api/dashboard?${param}`,
     );
     const data = await response.json();
-    if (data.error) {
-      console.log("Sync Error:", data.error);
-      return;
-    }
+    if (data.error) return;
 
-    // Update Stats
+    // ROUNDING FIXES
     document.getElementById("val-balance").innerText =
-      `$${data.balance.toFixed(2)}`;
-
-    // Equity
+      `$${Number(data.balance).toFixed(2)}`;
     const eqEl = document.getElementById("val-equity");
-    if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
-
-    // Used Margin
+    if (eqEl) eqEl.innerText = `$${Number(data.equity).toFixed(2)}`;
     const usedEl = document.getElementById("val-used");
-    if (usedEl) usedEl.innerText = `$${data.margin_used.toFixed(2)}`;
-
+    if (usedEl) usedEl.innerText = `$${Number(data.margin_used).toFixed(2)}`;
     const plEl = document.getElementById("val-pl");
-    plEl.innerText = `$${data.profit.toFixed(2)}`;
+    plEl.innerText = `$${Number(data.profit).toFixed(2)}`;
     plEl.className =
       data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
-
     document.getElementById("val-power").innerText =
-      `$${data.margin_free.toFixed(2)}`;
+      `$${Number(data.margin_free).toFixed(2)}`;
 
-    // Update Progress Bar
     const usedMargin = data.balance - data.margin_free;
     const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
     const bar = document.querySelector(".progress-fill");
     if (bar) bar.style.width = `${usagePct}%`;
 
-    // NEW: Update Watchlist Prices if available
     if (data.prices) updateWatchlistPrices(data.prices);
 
     renderPositions(data.positions);
@@ -194,6 +192,14 @@ async function fetchDashboardData() {
     }
   } catch (e) {
     console.log("Network Error:", e);
+  }
+}
+
+function updateWatchlistPrices(priceMap) {
+  for (let sym in priceMap) {
+    const el = document.getElementById(`wl-price-${sym}`);
+    // ROUNDING FIX
+    if (el) el.innerText = Number(priceMap[sym].bid).toFixed(2);
   }
 }
 
@@ -216,8 +222,12 @@ function refreshSpecificView(allPositions) {
     }
     if (found) break;
   }
-  if (found) viewSpecificTrade(found, null);
-  else clearSpecificView();
+  // Check if we are still on the correct symbol to avoid fighting with user navigation
+  if (found && found.symbol.startsWith(currentSymbol)) {
+      viewSpecificTrade(found, null);
+  } else {
+      clearSpecificView();
+  }
 }
 
 function renderSlTpCell(
@@ -246,12 +256,11 @@ function renderSlTpCell(
   return `
         <div style="display:flex; flex-direction:column; line-height:1.2;">
             <div style="display:flex; align-items:center;">
-                <span style="color:${color}; font-weight:700;">${targetPrice}</span>
+                <span style="color:${color}; font-weight:700;">${Number(targetPrice).toFixed(2)}</span>
                 <span class="remove-x" onclick="removeLevel('${ticket}', '${type}'); event.stopPropagation();">×</span>
             </div>
-            <span style="font-size:13px; font-weight:700;" class="${plClass}">(${plSign}$${plValue})</span>
-        </div>
-    `;
+            <span style="font-size:13px; font-weight:700;" class="${plClass}">(${plSign}$${Number(plValue).toFixed(2)})</span>
+        </div>`;
 }
 
 function renderPositions(positions) {
@@ -260,34 +269,15 @@ function renderPositions(positions) {
   tbody.innerHTML = "";
 
   if (positions.length === 0) {
-    tbody.innerHTML =
-      '<tr><td colspan="8" style="text-align:center; padding:20px; color:#555;">No open positions</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:20px; color:#555;">No open positions</td></tr>';
     return;
   }
 
   positions.forEach((pos) => {
     const isExpanded = expandedTickets.has(pos.ticket);
-    const openPrice =
-      pos.price_open !== undefined ? pos.price_open : pos.price || 0;
-
-    let slHtml = renderSlTpCell(
-      pos.sl,
-      "sl",
-      pos.ticket,
-      pos.symbol,
-      openPrice,
-      pos.volume,
-      pos.type,
-    );
-    let tpHtml = renderSlTpCell(
-      pos.tp,
-      "tp",
-      pos.ticket,
-      pos.symbol,
-      openPrice,
-      pos.volume,
-      pos.type,
-    );
+    const openPrice = pos.price_open !== undefined ? pos.price_open : pos.price || 0;
+    let slHtml = renderSlTpCell(pos.sl, "sl", pos.ticket, pos.symbol, openPrice, pos.volume, pos.type);
+    let tpHtml = renderSlTpCell(pos.tp, "tp", pos.ticket, pos.symbol, openPrice, pos.volume, pos.type);
 
     const masterRow = `
             <tr class="master-row" onclick="handleRowClick('${pos.ticket}', event, this)">
@@ -298,13 +288,15 @@ function renderPositions(positions) {
                         <div class="symbol-desc"><span class="${pos.type === "BUY" ? "badge-buy" : "badge-sell"}">${pos.type}</span></div>
                     </div>
                 </td>
-                <td><strong>${pos.volume.toFixed(2)}</strong></td>
-                <td>${openPrice}</td>
-                <td>${pos.price_current}</td>
+                <td><strong>${Number(pos.volume).toFixed(2)}</strong></td>
+                <td>${Number(openPrice).toFixed(2)}</td>
+                <td>${Number(pos.price_current).toFixed(2)}</td>
                 <td>${slHtml}</td>
                 <td>${tpHtml}</td>
-                <td class="${pos.profit >= 0 ? "text-green" : "text-red"}">$${pos.profit.toFixed(2)}</td>
-                <td><button class="btn-close-trade" onclick="closeTrade('${pos.ticket}'); event.stopPropagation();">Close All</button></td>
+                <td class="${pos.profit >= 0 ? "text-green" : "text-red"}">$${Number(pos.profit).toFixed(2)}</td>
+                <td>
+                    <button class="btn-close-trade" onclick="closeTrade('${pos.ticket}', this); event.stopPropagation();">Close All</button>
+                </td>
             </tr>`;
 
     tbody.innerHTML += masterRow;
@@ -312,37 +304,21 @@ function renderPositions(positions) {
     if (pos.sub_positions && pos.sub_positions.length > 0) {
       pos.sub_positions.forEach((sub) => {
         const subDataStr = JSON.stringify(sub).replace(/"/g, "&quot;");
-        let subSlHtml = renderSlTpCell(
-          sub.sl,
-          "sl",
-          sub.ticket,
-          sub.symbol,
-          sub.price,
-          sub.volume,
-          sub.type,
-        );
-        let subTpHtml = renderSlTpCell(
-          sub.tp,
-          "tp",
-          sub.ticket,
-          sub.symbol,
-          sub.price,
-          sub.volume,
-          sub.type,
-        );
-
+        let subSlHtml = renderSlTpCell(sub.sl, "sl", sub.ticket, sub.symbol, sub.price, sub.volume, sub.type);
+        let subTpHtml = renderSlTpCell(sub.tp, "tp", sub.ticket, sub.symbol, sub.price, sub.volume, sub.type);
+        
         const rowHtml = `
                     <tr class="child-row child-of-${pos.ticket}" style="display: ${isExpanded ? "table-row" : "none"};"
                         onclick="viewSpecificTrade(${subDataStr}, event)">
                         <td class="child-account-name">↳ ${sub.account_name}</td>
-                        <td class="child-text">${sub.volume.toFixed(2)}</td>
-                        <td class="child-text">${sub.price}</td>
+                        <td class="child-text">${Number(sub.volume).toFixed(2)}</td>
+                        <td class="child-text">${Number(sub.price).toFixed(2)}</td>
                         <td class="child-text">-</td>
                         <td class="child-text">${subSlHtml}</td>
                         <td class="child-text">${subTpHtml}</td>
-                        <td class="child-text ${sub.profit >= 0 ? "text-green" : "text-red"}">$${sub.profit.toFixed(2)}</td>
+                        <td class="child-text ${sub.profit >= 0 ? "text-green" : "text-red"}">$${Number(sub.profit).toFixed(2)}</td>
                         <td style="vertical-align: middle;">
-                            <button class="btn-remove-level" style="height:22px; line-height:22px; padding:0 10px; font-family:'Inter', sans-serif;" onclick="closeTrade('${sub.ticket}'); event.stopPropagation();">Close</button>
+                            <button class="btn-remove-level" style="height:22px; line-height:22px; padding:0 10px; font-family:'Inter', sans-serif;" onclick="closeTrade('${sub.ticket}', this); event.stopPropagation();">Close</button>
                         </td>
                     </tr>`;
         tbody.innerHTML += rowHtml;
@@ -363,9 +339,9 @@ function renderHistory(history) {
                 <td class="time-cell">${deal.time}</td>
                 <td style="font-weight: 700;">${deal.symbol}<div class="history-account-name">${deal.account}</div></td>
                 <td><span class="${badgeClass}">${deal.type}</span></td>
-                <td>${deal.volume.toFixed(2)}</td>
-                <td>${deal.price}</td>
-                <td class="${profitClass}">$${deal.profit.toFixed(2)}</td>
+                <td>${Number(deal.volume).toFixed(2)}</td>
+                <td>${Number(deal.price).toFixed(2)}</td>
+                <td class="${profitClass}">$${Number(deal.profit).toFixed(2)}</td>
             </tr>`;
   });
 }
@@ -393,15 +369,15 @@ window.toggleGroup = function (ticket, event, rowElem) {
 async function removeLevel(ticket, type) {
   // Fix: Convert type to lowercase to handle "TP" (chart) and "tp" (table)
   const normType = type.toLowerCase();
-  
+
   if (!confirm(`Remove ${normType.toUpperCase()}?`)) return;
-  
+
   const payload = { ticket: ticket, user_id: currentUserId };
-  
+
   // Now matches both cases
   if (normType === "sl") payload.sl = 0.0;
   if (normType === "tp") payload.tp = 0.0;
-  
+
   try {
     const res = await fetch("http://127.0.0.1:5000/api/modify", {
       method: "POST",
@@ -410,7 +386,9 @@ async function removeLevel(ticket, type) {
     });
     const data = await res.json();
     if (data.details && data.details.length > 0) {
-      const fails = data.details.filter((d) => !d.includes("Done") && !d.includes("Success"));
+      const fails = data.details.filter(
+        (d) => !d.includes("Done") && !d.includes("Success"),
+      );
       if (fails.length > 0) showError("Modification Error", fails.join("\n"));
     }
     fetchDashboardData();
@@ -466,12 +444,19 @@ function initChart() {
   // Sync Legend
   chart.subscribeCrosshairMove((param) => {
     if (param.time) {
+      lastHoveredTime = param.time; // TRACK HOVERED TIME
       const data = param.seriesData.get(candleSeries);
       if (data) updateLegend(data);
-    } else if (latestCandle) updateLegend(latestCandle);
-
-    // Also sync left labels on mouse move (optional for smoothness)
+    } else {
+      lastHoveredTime = null; // CLEARED
+      if (latestCandle) updateLegend(latestCandle);
+    }
     updateLeftLabels();
+  });
+
+  container.addEventListener('mouseleave', () => {
+      lastHoveredTime = null;
+      if (latestCandle) updateLegend(latestCandle);
   });
 
   // Sync Left Labels on Scroll/Zoom
@@ -520,101 +505,102 @@ function updateLeftLabels() {
 }
 
 function renderSingleLabel(container, ticket, type, price, data) {
-  if (!price || price <= 0) return;
-  const y = candleSeries.priceToCoordinate(price);
-  if (y === null) return;
+    if (!price || price <= 0) return;
+    const y = candleSeries.priceToCoordinate(price);
+    if (y === null) return;
 
-  const div = document.createElement("div");
-  div.className = "trade-label-tag";
-  div.style.top = `${y}px`;
+    const div = document.createElement("div");
+    div.className = "trade-label-tag";
+    div.style.top = `${y}px`;
 
-  let plText = "";
-  if (type === "TP" || type === "SL") {
-    const pl = calculatePL(
-      data.symbol,
-      data.type,
-      data.volume,
-      data.price_open,
-      price,
-    );
-    const sign = pl >= 0 ? "+" : "";
-    plText = `($${sign}${pl})`;
-  }
+    let plText = "";
+    if (type === "TP" || type === "SL") {
+        const pl = calculatePL(data.symbol, data.type, data.volume, data.price_open, price);
+        const sign = pl >= 0 ? "+" : "";
+        plText = `($${sign}${Number(pl).toFixed(2)})`;
+    }
 
-  if (type === "MAIN") {
-    const color = data.type === "BUY" ? "#2962ff" : "#ff5555";
-    div.style.backgroundColor = color;
-    let labelText = `${data.type} ${data.volume} @ ${price}`;
-    if (data.account_name) labelText = `${data.account_name} | ${labelText}`;
-    div.innerText = labelText;
-  } else if (type === "TP") {
-    div.style.backgroundColor = COL_TP;
-    div.innerText = `TP ${price} ${plText}`;
-  } else if (type === "SL") {
-    div.style.backgroundColor = COL_SL;
-    div.innerText = `SL ${price} ${plText}`;
-  }
+    if (type === "MAIN") {
+        const color = data.type === "BUY" ? "#2962ff" : "#ff5555";
+        div.style.backgroundColor = color;
+        
+        // Use data.profit (passed from backend/viewSpecificTrade)
+        const currentPL = data.profit ? Number(data.profit).toFixed(2) : "0.00";
+        const sign = data.profit >= 0 ? "+" : "";
+        
+        let labelText = `${data.type} ${Number(data.volume).toFixed(2)} @ ${Number(price).toFixed(2)} (${sign}$${currentPL})`;
+        
+        if (data.account_name) labelText = `${data.account_name} | ${labelText}`;
+        div.innerText = labelText;
+    } else if (type === "TP") {
+        div.style.backgroundColor = COL_TP;
+        div.innerText = `TP ${Number(price).toFixed(2)} ${plText}`;
+    } else if (type === "SL") {
+        div.style.backgroundColor = COL_SL;
+        div.innerText = `SL ${Number(price).toFixed(2)} ${plText}`;
+    }
 
-  // Interaction with Timer Logic
-  div.onmouseenter = () => {
-    if (menuHideTimer) clearTimeout(menuHideTimer);
-    showHoverMenuFixed(ticket, type, y, div);
-  };
-
-  div.onmouseleave = () => {
-    menuHideTimer = setTimeout(() => {
-      document.getElementById("hover-menu").style.display = "none";
-    }, 150);
-  };
-
-  container.appendChild(div);
+    div.onmouseenter = () => {
+        if (menuHideTimer) clearTimeout(menuHideTimer);
+        showHoverMenuFixed(ticket, type, y, div);
+    };
+    
+    div.onmouseleave = () => {
+        menuHideTimer = setTimeout(() => {
+             document.getElementById("hover-menu").style.display = "none";
+        }, 150);
+    };
+    
+    container.appendChild(div);
 }
 
-// --- UPDATED HOVER MENU POSITIONING ---
 function showHoverMenuFixed(ticket, type, y, labelElem) {
-  const menu = document.getElementById("hover-menu");
-  if (!priceLines[ticket]) return;
-  const pos = priceLines[ticket].data;
+    const menu = document.getElementById("hover-menu");
+    if(!priceLines[ticket]) return;
+    const pos = priceLines[ticket].data;
 
-  let html = "";
-  if (type === "MAIN") {
-    html += `<span style="color:#fff; font-weight:700; font-size:12px; margin-right:5px;">#${ticket}</span>`;
-    if (!pos.tp || pos.tp <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
-    if (!pos.sl || pos.sl <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
-  } else if (type === "TP" || type === "SL") {
-    const val = type === "TP" ? pos.tp : pos.sl;
-    const pl = calculatePL(
-      pos.symbol,
-      pos.type,
-      pos.volume,
-      pos.price_open,
-      val,
-    );
-    const colorClass = pl >= 0 ? "pl-green" : "pl-red";
-    html += `<span class="pl-preview ${colorClass}">${pl >= 0 ? "+" : ""}$${pl}</span>`;
-    html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${val})">Move</button>`;
-    html += `<button class="btn-remove-level" onclick="removeLevel('${ticket}', '${type}')">×</button>`;
-  }
+    // FIX 3: Hide menu if BOTH TP and SL are already set
+    if (type === "MAIN" && pos.tp > 0 && pos.sl > 0) {
+        menu.style.display = "none";
+        return;
+    }
 
-  menu.innerHTML = html;
-  menu.style.display = "flex";
+    let html = "";
+    if (type === "MAIN") {
+         // FIX 3: Removed ticket number text
+         if(!pos.tp || pos.tp <= 0) html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
+         if(!pos.sl || pos.sl <= 0) html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
+    } else if (type === "TP" || type === "SL") {
+         const val = type === "TP" ? pos.tp : pos.sl;
+         const pl = calculatePL(pos.symbol, pos.type, pos.volume, pos.price_open, val);
+         const colorClass = pl >= 0 ? "pl-green" : "pl-red";
+         html += `<span class="pl-preview ${colorClass}">${pl >= 0 ? "+" : ""}$${Number(pl).toFixed(2)}</span>`;
+         html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${val})">Move</button>`;
+         html += `<button class="btn-remove-level" onclick="removeLevel('${ticket}', '${type}')">×</button>`;
+    }
 
-  menu.style.position = "absolute";
+    if (!html) {
+        menu.style.display = "none";
+        return;
+    }
 
-  const wrapper = document.querySelector(".chart-area-wrapper");
-  if (wrapper) {
-    const wrapperRect = wrapper.getBoundingClientRect();
-    const labelRect = labelElem.getBoundingClientRect();
-    const leftPos = labelRect.right - wrapperRect.left + 10;
-    const topPos = labelRect.top - wrapperRect.top + labelRect.height / 2;
+    menu.innerHTML = html;
+    menu.style.display = "flex";
+    
+    menu.style.position = "absolute"; 
+    
+    const wrapper = document.querySelector('.chart-area-wrapper');
+    if(wrapper) {
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const labelRect = labelElem.getBoundingClientRect();
+        const leftPos = (labelRect.right - wrapperRect.left) + 10;
+        const topPos = (labelRect.top - wrapperRect.top) + (labelRect.height / 2);
 
-    menu.style.right = "auto";
-    menu.style.left = `${leftPos}px`;
-    menu.style.top = `${topPos}px`;
-    menu.style.transform = "translateY(-50%)";
-  }
+        menu.style.right = "auto";
+        menu.style.left = `${leftPos}px`;
+        menu.style.top = `${topPos}px`;
+        menu.style.transform = "translateY(-50%)";
+    }
 }
 
 // ... (Rest of existing functions) ...
@@ -645,7 +631,10 @@ async function changeSymbol(newSym) {
   if (currentSymbol !== newSym) {
     currentSymbol = newSym;
     document.getElementById("chart-symbol-name").innerText = currentSymbol;
+    // FIX 1: Navigation Lock - Reset specific view when user manually changes symbol
+    specificTradeView = null;
   }
+  
   for (let t in priceLines) {
     const group = priceLines[t];
     if (group.main) candleSeries.removePriceLine(group.main);
@@ -653,8 +642,11 @@ async function changeSymbol(newSym) {
     if (group.sl) candleSeries.removePriceLine(group.sl);
   }
   priceLines = {};
-  currentSymbol = newSym;
+  
+  // Re-set data just in case
+  currentSymbol = newSym; 
   document.getElementById("chart-symbol-name").innerText = currentSymbol;
+  
   candleSeries.setData([]);
   renderWatchlist();
   await loadFullChartHistory();
@@ -674,9 +666,12 @@ async function updateLiveCandle() {
       const latest = data[data.length - 1];
       candleSeries.update(latest);
       latestCandle = latest;
-      updateLegend(latest);
+      
+      // FIX: Only update legend if NOT hovering history OR if hovering current candle
+      if (!lastHoveredTime || lastHoveredTime === latest.time) {
+          updateLegend(latest);
+      }
 
-      // Update custom labels
       updateLeftLabels();
     }
   } catch (e) {
@@ -690,10 +685,10 @@ function updateLegend(data) {
   const isGreen = data.close >= data.open;
   const valColor = isGreen ? "#36d7b7" : "#ff5555";
   legend.innerHTML = `
-        <span style="color:white">O:</span><span style="color:${valColor}">${data.open}</span>
-        <span style="color:white">H:</span><span style="color:${valColor}">${data.high}</span>
-        <span style="color:white">L:</span><span style="color:${valColor}">${data.low}</span>
-        <span style="color:white">C:</span><span style="color:${valColor}">${data.close}</span>
+        <span style="color:white">O:</span><span style="color:${valColor}">${Number(data.open).toFixed(2)}</span>
+        <span style="color:white">H:</span><span style="color:${valColor}">${Number(data.high).toFixed(2)}</span>
+        <span style="color:white">L:</span><span style="color:${valColor}">${Number(data.low).toFixed(2)}</span>
+        <span style="color:white">C:</span><span style="color:${valColor}">${Number(data.close).toFixed(2)}</span>
     `;
 }
 
@@ -828,10 +823,10 @@ function cancelDrag() {
 }
 
 function updateChartPositions(positions) {
-  const currentPositions = positions.filter((p) => p.symbol === currentSymbol);
+  // FIX: Use startsWith to match 'BTCUSDT' (chart) with 'BTCUSDTp' (pos)
+  const currentPositions = positions.filter((p) => p.symbol.startsWith(currentSymbol));
   const activeTickets = new Set(currentPositions.map((p) => p.ticket));
 
-  // Cleanup old lines
   for (let t in priceLines) {
     if (!activeTickets.has(t)) {
       const group = priceLines[t];
@@ -869,14 +864,13 @@ function updateChartPositions(positions) {
 
     const group = priceLines[pos.ticket];
 
-    // TP Line
     if (pos.tp > 0) {
       if (!group.tp) {
         group.tp = candleSeries.createPriceLine({
           price: pos.tp,
           color: COL_TP,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dashed,
+          lineWidth: 2, 
+          lineStyle: LightweightCharts.LineStyle.Solid, 
           axisLabelVisible: false,
           title: "",
         });
@@ -888,14 +882,13 @@ function updateChartPositions(positions) {
       group.tp = null;
     }
 
-    // SL Line
     if (pos.sl > 0) {
       if (!group.sl) {
         group.sl = candleSeries.createPriceLine({
           price: pos.sl,
           color: COL_SL,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dashed,
+          lineWidth: 2, 
+          lineStyle: LightweightCharts.LineStyle.Solid, 
           axisLabelVisible: false,
           title: "",
         });
@@ -908,7 +901,6 @@ function updateChartPositions(positions) {
     }
   });
 
-  // Trigger HTML Label Update
   updateLeftLabels();
 }
 
@@ -916,9 +908,11 @@ function viewSpecificTrade(subPos, event) {
   if (event) event.stopPropagation();
   specificTradeView = subPos;
 
-  if (subPos.symbol !== currentSymbol) changeSymbol(subPos.symbol);
+  if (!subPos.symbol.startsWith(currentSymbol)) {
+      const match = WATCHLIST.find(w => subPos.symbol.startsWith(w.sym));
+      changeSymbol(match ? match.sym : subPos.symbol);
+  }
 
-  // Clear all existing lines
   for (let t in priceLines) {
     const group = priceLines[t];
     if (group.main) candleSeries.removePriceLine(group.main);
@@ -929,9 +923,8 @@ function viewSpecificTrade(subPos, event) {
 
   const mainColor = subPos.type === "BUY" ? COL_BUY : COL_SELL;
 
-  // Create invisible chart line (we use custom label)
   const mainLine = candleSeries.createPriceLine({
-    price: subPos.price,
+    price: parseFloat(subPos.price), 
     color: mainColor,
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Solid,
@@ -948,12 +941,14 @@ function viewSpecificTrade(subPos, event) {
       type: subPos.type,
       price_open: subPos.price,
       price: subPos.price,
-      price_current: subPos.price,
+      price_current: subPos.price_current || subPos.price, 
       symbol: subPos.symbol,
       volume: subPos.volume,
       sl: subPos.sl,
       tp: subPos.tp,
       account_name: subPos.account_name,
+      // --- FIX: Pass the profit value here so the label can display it ---
+      profit: subPos.profit 
     },
   };
 
@@ -961,8 +956,8 @@ function viewSpecificTrade(subPos, event) {
     priceLines[subPos.ticket].sl = candleSeries.createPriceLine({
       price: subPos.sl,
       color: COL_SL,
-      lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
+      lineWidth: 2, 
+      lineStyle: LightweightCharts.LineStyle.Solid,
       axisLabelVisible: false,
       title: "",
     });
@@ -971,14 +966,16 @@ function viewSpecificTrade(subPos, event) {
     priceLines[subPos.ticket].tp = candleSeries.createPriceLine({
       price: subPos.tp,
       color: COL_TP,
-      lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
+      lineWidth: 2, 
+      lineStyle: LightweightCharts.LineStyle.Solid,
       axisLabelVisible: false,
       title: "",
     });
   }
 
-  updateLeftLabels();
+  setTimeout(() => {
+      updateLeftLabels();
+  }, 100);
 }
 
 function clearSpecificView() {
@@ -988,6 +985,10 @@ function clearSpecificView() {
 
 async function placeOrder(type) {
   const qty = document.getElementById("trade-qty").value;
+  // LOADING: Select button and add loading class
+  const btn = document.querySelector(type === 'BUY' ? '.btn-buy' : '.btn-sell');
+  if(btn) btn.classList.add('btn-loading');
+
   try {
     const res = await fetch("http://127.0.0.1:5000/api/trade", {
       method: "POST",
@@ -1016,14 +1017,20 @@ async function placeOrder(type) {
       if (fails.length > 0) {
         showError("Trade Errors", fails.join("\n"));
       }
-      fetchDashboardData();
+      await fetchDashboardData();
     }
   } catch (e) {
     showError("Order Failed", e.message);
+  } finally {
+      // LOADING: Remove loading class
+      if(btn) btn.classList.remove('btn-loading');
   }
 }
 
-async function closeTrade(ticket) {
+async function closeTrade(ticket, btnElem) {
+  // LOADING: Toggle loading class
+  if(btnElem) btnElem.classList.add('btn-loading');
+
   try {
     const res = await fetch("http://127.0.0.1:5000/api/close", {
       method: "POST",
@@ -1040,10 +1047,13 @@ async function closeTrade(ticket) {
       if (fails.length > 0) {
         showError("Close Errors", fails.join("\n"));
       }
-      fetchDashboardData();
+      await fetchDashboardData();
     }
   } catch (e) {
     showError("Network Error", e.message);
+  } finally {
+      // LOADING: Remove loading class
+      if(btnElem) btnElem.classList.remove('btn-loading');
   }
 }
 

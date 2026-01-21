@@ -72,12 +72,33 @@ def switch_context(path):
         return False
 
 
+def get_actual_symbol(requested_symbol):
+    """
+    Finds the actual symbol name on the connected terminal.
+    Example: Input 'BTCUSDT' -> Returns 'BTCUSDTp' if that's what the broker uses.
+    """
+    # 1. Try exact match
+    if mt5.symbol_info(requested_symbol):
+        return requested_symbol
+
+    # 2. Search for matches (e.g. BTCUSDT -> BTCUSDTp)
+    # Get all symbols that contain the requested string
+    candidates = mt5.symbols_get(group=f"*{requested_symbol}*")
+
+    if candidates:
+        for cand in candidates:
+            # Check if it starts with the requested symbol (ignoring case usually safe, but strict here)
+            if cand.name.startswith(requested_symbol):
+                return cand.name
+
+    # 3. Fallback to original if nothing found (will likely fail downstream but strictly correct)
+    return requested_symbol
+
 # --- CORE: SYNC WORKER ---
 def sync_all_accounts_data(user_id):
     global SYSTEM_STATE
     if not user_id: return
 
-    # Prevent stacking syncs
     if lock.locked(): return
 
     try:
@@ -85,10 +106,38 @@ def sync_all_accounts_data(user_id):
         docs = accs_ref.where('IS_ACTIVE', '==', True).get()
         db_accounts = [dict(d.to_dict(), ID=d.id) for d in docs]
 
-        if not db_accounts: return
+        # 1. Capture valid Login IDs from the DB (Enabled Accounts)
+        valid_db_logins = set()
+        active_paths = set()
+
+        for acc in db_accounts:
+            try:
+                login_id = int(acc.get('USER', 0))
+                if login_id: valid_db_logins.add(login_id)
+
+                path = acc.get('TERMINAL_PATH')
+                if path: active_paths.add(path)
+            except:
+                pass
 
         with lock:
-            SYSTEM_STATE["last_update"] = time.time()  # Update timestamp
+            SYSTEM_STATE["last_update"] = time.time()
+
+            # Fix: Reset master_path if it belongs to a disabled account
+            if SYSTEM_STATE["master_path"] and SYSTEM_STATE["master_path"] not in active_paths:
+                SYSTEM_STATE["master_path"] = None
+
+            # 2. Prune Disabled Accounts from Cache
+            # We do this BEFORE updating to ensure clean state, or AFTER to clean up.
+            # Doing it here ensures we don't carry over disabled accounts.
+            current_cached_logins = list(SYSTEM_STATE["accounts"].keys())
+            for cached_login in current_cached_logins:
+                if cached_login not in valid_db_logins:
+                    del SYSTEM_STATE["accounts"][cached_login]
+                    print(f"Removed disabled account from cache: {cached_login}")
+
+            if not db_accounts:
+                return
 
             for acc in db_accounts:
                 path = acc.get('TERMINAL_PATH')
@@ -101,7 +150,6 @@ def sync_all_accounts_data(user_id):
                     info = mt5.account_info()
                     raw_pos = mt5.positions_get()
 
-                    # Fix for History: Check 30 days back to 2 days future
                     from_date = datetime.now() - timedelta(days=30)
                     to_date = datetime.now() + timedelta(days=2)
                     raw_deals = mt5.history_deals_get(from_date, to_date)
@@ -142,6 +190,7 @@ def sync_all_accounts_data(user_id):
 
             if SYSTEM_STATE["master_path"]:
                 switch_context(SYSTEM_STATE["master_path"])
+
     except Exception as e:
         print(f"Sync Error: {e}")
 
@@ -151,8 +200,6 @@ def sync_all_accounts_data(user_id):
 def get_dashboard_data():
     user_id = request.args.get('user_id')
 
-    # NEW: Auto-refresh if data is stale (> 1.5 seconds old)
-    # This ensures charts update when TP/SL is hit automatically
     if time.time() - SYSTEM_STATE["last_update"] > 1.5:
         threading.Thread(target=sync_all_accounts_data, args=(user_id,)).start()
 
@@ -163,34 +210,37 @@ def get_dashboard_data():
     all_history = []
 
     active_symbols = set()
-    if SYSTEM_STATE["accounts"]:
-        for acc in SYSTEM_STATE["accounts"].values():
+
+    # Use list() to iterate over a copy of keys/items to avoid Runtime Error if Sync Worker modifies dict
+    current_accounts = list(SYSTEM_STATE["accounts"].items())
+
+    if current_accounts:
+        for _, acc in current_accounts:
             for p in acc['positions']: active_symbols.add(p['symbol'])
 
-    # Get live prices for active symbols + watchlist (if needed)
-    # Note: request.args.get('watchlist') handling can be added here if not already present
     watchlist_str = request.args.get('watchlist', '')
     if watchlist_str:
         for w in watchlist_str.split(','):
             if w.strip(): active_symbols.add(w.strip())
 
-    current_prices = {}  # Send to frontend
+    current_prices = {}
 
-    # Context switch might be needed for prices if using master path,
-    # but usually symbol_info_tick works if initialized.
-    # To be safe, we assume Sync Worker updates SYSTEM_STATE["prices"] mostly,
-    # but we can try to fetch live if we are in a valid context.
-
-    for sym in active_symbols:
-        tick = mt5.symbol_info_tick(sym)
-        if tick:
-            SYSTEM_STATE["prices"][sym] = tick.bid
-            current_prices[sym] = {"bid": tick.bid, "ask": tick.ask}
+    with lock:
+        if SYSTEM_STATE["master_path"] and mt5.terminal_info():
+            for sym in active_symbols:
+                actual_sym = get_actual_symbol(sym)
+                tick = mt5.symbol_info_tick(actual_sym)
+                if tick:
+                    SYSTEM_STATE["prices"][sym] = tick.bid
+                    current_prices[sym] = {"bid": tick.bid, "ask": tick.ask}
+                else:
+                    current_prices[sym] = {"bid": SYSTEM_STATE["prices"].get(sym, 0.0), "ask": 0.0}
         else:
-            current_prices[sym] = {"bid": SYSTEM_STATE["prices"].get(sym, 0.0), "ask": 0.0}
+            for sym in active_symbols:
+                current_prices[sym] = {"bid": SYSTEM_STATE["prices"].get(sym, 0.0), "ask": 0.0}
 
-    # ... (Rest of aggregation logic remains same) ...
-    for login, acc_data in SYSTEM_STATE["accounts"].items():
+    # Aggregate Data
+    for login, acc_data in current_accounts:
         total_balance += acc_data['balance']
         total_margin_used += acc_data.get('margin_used', 0.0)
         all_history.extend(acc_data.get('history', []))
@@ -270,9 +320,12 @@ def get_dashboard_data():
 def place_trade():
     data = request.json
     user_id = data.get('user_id')
-    symbol = data.get('symbol')
+    req_symbol = data.get('symbol')
     action = data.get('type')
-    mult = float(data.get('volume', 1.0))
+
+    # 1. Get Multiplier from frontend
+    multiplier = float(data.get('volume', 1.0))
+
     results = []
 
     docs = db.collection('USERS').document(user_id).collection('ACCOUNTS').where('IS_ACTIVE', '==', True).get()
@@ -283,7 +336,8 @@ def place_trade():
         for doc in docs:
             acc = doc.to_dict()
             if switch_context(acc.get('TERMINAL_PATH')):
-                for p in mt5.positions_get(symbol=symbol) or []:
+                act_sym = get_actual_symbol(req_symbol)
+                for p in mt5.positions_get(symbol=act_sym) or []:
                     if p.type == opposing: blocked = True
             if blocked: break
 
@@ -298,22 +352,38 @@ def place_trade():
                 results.append(f"{acc.get('NAME')}: Connect Fail");
                 continue
 
+            act_sym = get_actual_symbol(req_symbol)
             auto_sl, auto_tp = 0.0, 0.0
-            for p in mt5.positions_get(symbol=symbol) or []:
+            for p in mt5.positions_get(symbol=act_sym) or []:
                 if p.type == target_type: auto_sl, auto_tp = p.sl, p.tp; break
 
+            # 2. Get Account Specific Base Volume
             config = acc.get('SYMBOL_CONFIG', {})
-            base = float(config[symbol]['VOLUME']) if symbol in config else 0.01
-            if symbol not in config:
-                s_info = mt5.symbol_info(symbol)
-                if s_info: base = s_info.volume_min
+            base_vol = 0.01  # Safe default
 
-            vol = round(base * mult, 2)
-            tick = mt5.symbol_info_tick(symbol)
-            if not tick: continue
+            if req_symbol in config:
+                # Config might be saved as object {"VOLUME": 0.05} or directly
+                val = config[req_symbol]
+                if isinstance(val, dict):
+                    base_vol = float(val.get('VOLUME', 0.01))
+                else:
+                    base_vol = float(val)
+            else:
+                # Fallback to symbol min volume
+                s_info = mt5.symbol_info(act_sym)
+                if s_info: base_vol = s_info.volume_min
+
+            # 3. Calculate Final Volume
+            vol = round(base_vol * multiplier, 5)
+            if vol <= 0: vol = 0.01
+
+            tick = mt5.symbol_info_tick(act_sym)
+            if not tick:
+                results.append(f"{acc.get('NAME')}: Price not found for {act_sym}")
+                continue
 
             req = {
-                "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": vol,
+                "action": mt5.TRADE_ACTION_DEAL, "symbol": act_sym, "volume": vol,
                 "type": mt5.ORDER_TYPE_BUY if action == 'BUY' else mt5.ORDER_TYPE_SELL,
                 "price": tick.ask if action == 'BUY' else tick.bid, "magic": 234000,
                 "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
@@ -323,7 +393,6 @@ def place_trade():
 
             res = mt5.order_send(req)
 
-            # --- FIX: Only record Errors ---
             if res.retcode != mt5.TRADE_RETCODE_DONE:
                 results.append(f"{acc.get('NAME')}: {res.comment}")
 
@@ -339,7 +408,7 @@ def close_trade():
     req_ticket = str(data.get('ticket'))
 
     parts = req_ticket.split('_')
-    symbol = parts[0]
+    symbol_raw = parts[0]  # This is likely "BTCUSDT" from frontend
     p_type = 0 if parts[1] == 'BUY' else 1
     target_login = int(parts[2]) if len(parts) > 2 else None
 
@@ -355,13 +424,16 @@ def close_trade():
 
             path = acc.get('TERMINAL_PATH')
             if switch_context(path):
-                positions = mt5.positions_get(symbol=symbol)
+                # FIX: Resolve symbol
+                act_sym = get_actual_symbol(symbol_raw)
+
+                positions = mt5.positions_get(symbol=act_sym)
                 if positions:
                     for pos in positions:
                         if pos.type == p_type:
-                            tick = mt5.symbol_info_tick(symbol)
+                            tick = mt5.symbol_info_tick(act_sym)
                             req = {
-                                "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": pos.volume,
+                                "action": mt5.TRADE_ACTION_DEAL, "symbol": act_sym, "volume": pos.volume,
                                 "type": mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY,
                                 "position": pos.ticket, "price": tick.bid if pos.type == 0 else tick.ask,
                                 "magic": 234000
@@ -382,7 +454,7 @@ def modify_trade():
     req_ticket = str(data.get('ticket'))
 
     parts = req_ticket.split('_')
-    symbol = parts[0]
+    symbol_raw = parts[0]
     p_type = 0 if parts[1] == 'BUY' else 1
     target_login = int(parts[2]) if len(parts) > 2 else None
 
@@ -401,7 +473,10 @@ def modify_trade():
 
             path = acc.get('TERMINAL_PATH')
             if switch_context(path):
-                positions = mt5.positions_get(symbol=symbol)
+                # FIX: Resolve symbol
+                act_sym = get_actual_symbol(symbol_raw)
+
+                positions = mt5.positions_get(symbol=act_sym)
                 if positions:
                     for pos in positions:
                         if pos.type == p_type:
@@ -419,26 +494,37 @@ def modify_trade():
 
 @app.route('/api/candles', methods=['GET'])
 def get_candles():
-    if not mt5.terminal_info():
+    with lock:
         if SYSTEM_STATE["master_path"]:
             switch_context(SYSTEM_STATE["master_path"])
         else:
-            mt5.initialize()
+            if not mt5.terminal_info():
+                return jsonify([])
 
-    symbol = request.args.get('symbol', 'XAUUSD')
-    timeframe = request.args.get('timeframe', '1H')
-    tf_map = {'1H': mt5.TIMEFRAME_H1, '4H': mt5.TIMEFRAME_H4, '1D': mt5.TIMEFRAME_D1, '1M': mt5.TIMEFRAME_M1,
-              '15M': mt5.TIMEFRAME_M15}
-    rates = mt5.copy_rates_from_pos(symbol, tf_map.get(timeframe, mt5.TIMEFRAME_H1), 0, 1000)
-    if rates is None: return jsonify([])
-    data = [{"time": int(x['time']), "open": x['open'], "high": x['high'], "low": x['low'], "close": x['close']} for x
-            in rates]
-    tick = mt5.symbol_info_tick(symbol)
-    if tick and data:
-        data[-1]['close'] = tick.bid
-        data[-1]['high'] = max(data[-1]['high'], tick.bid)
-        data[-1]['low'] = min(data[-1]['low'], tick.bid)
-    return jsonify(data)
+        symbol = request.args.get('symbol', 'XAUUSD')
+        timeframe = request.args.get('timeframe', '1H')
+
+        actual_sym = get_actual_symbol(symbol)
+
+        # Added 5M support
+        tf_map = {'5M': mt5.TIMEFRAME_M5, '1H': mt5.TIMEFRAME_H1, '4H': mt5.TIMEFRAME_H4,
+                  '1D': mt5.TIMEFRAME_D1, '1M': mt5.TIMEFRAME_M1, '15M': mt5.TIMEFRAME_M15}
+
+        rates = mt5.copy_rates_from_pos(actual_sym, tf_map.get(timeframe, mt5.TIMEFRAME_H1), 0, 1000)
+
+        if rates is None: return jsonify([])
+
+        data = [{"time": int(x['time']), "open": x['open'], "high": x['high'], "low": x['low'], "close": x['close']} for
+                x
+                in rates]
+
+        tick = mt5.symbol_info_tick(actual_sym)
+        if tick and data:
+            data[-1]['close'] = tick.bid
+            data[-1]['high'] = max(data[-1]['high'], tick.bid)
+            data[-1]['low'] = min(data[-1]['low'], tick.bid)
+
+        return jsonify(data)
 
 
 @app.route('/api/accounts', methods=['GET'])
