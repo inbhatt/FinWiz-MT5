@@ -13,36 +13,15 @@
   </head>
   <body>
     <div class="app-container" id="app-container">
-      <nav class="top-stats-bar hidden" id="top-bar">
-        <div class="stat-item">
-          <span class="stat-label">Balance</span>
-          <span class="stat-value" id="val-balance">--</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Equity</span>
-          <span class="stat-value" id="val-equity">--</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">P/L</span>
-          <span class="stat-value" id="val-pl">--</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Used Margin</span>
-          <span class="stat-value" id="val-used">--</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Free Margin</span>
-          <span class="stat-value" id="val-power">--</span>
-        </div>
-      </nav>
-
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-top">
-             <div class="watchlist-header">
-                <span>Watchlist</span>
-                <button class="btn-icon sidebar-toggle" onclick="toggleSidebar()">«</button>
-             </div>
-             <div id="watchlist-container"></div>
+          <div class="watchlist-header">
+            <span>Watchlist</span>
+            <button class="btn-icon sidebar-toggle" onclick="toggleSidebar()">
+              «
+            </button>
+          </div>
+          <div id="watchlist-container"></div>
         </div>
 
         <div class="sidebar-footer">
@@ -67,94 +46,147 @@
 
       <main class="main-content">
         <div class="dashboard-grid">
-          
-          <div class="chart-col" style="height: 75vh; min-height: 500px;">
+          <div class="top-row">
+            <div class="stats-col hidden" id="stats-column">
+              <div class="stat-card">
+                <h3>Total Balance</h3>
+                <div class="stat-value" id="val-balance">--</div>
+              </div>
+              <div class="stat-card">
+                <h3>Equity</h3>
+                <div class="stat-value" id="val-equity">--</div>
+              </div>
+              <div class="stat-card">
+                <h3>Profit / Loss</h3>
+                <div class="stat-value" id="val-pl">--</div>
+              </div>
+              <div class="stat-card">
+                <h3>Free Margin</h3>
+                <div class="stat-value" id="val-power">--</div>
+                <div
+                  class="progress-bar"
+                  style="
+                    height: 4px;
+                    background: rgba(255, 255, 255, 0.1);
+                    margin-top: 10px;
+                    border-radius: 2px;
+                    overflow: hidden;
+                  "
+                >
+                  <div
+                    class="progress-fill"
+                    style="width: 0%; height: 100%; background: #36d7b7"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="chart-col">
               <div class="chart-header">
-                <h2 id="chart-symbol-name" style="margin: 0; font-size: 16px">XAUUSD</h2>
+                <h2 id="chart-symbol-name" style="margin: 0; font-size: 16px">
+                  XAUUSD
+                </h2>
                 <div class="chart-controls">
                   <button class="active">1M</button>
+                  <button>3M</button>
                   <button>5M</button>
                   <button>15M</button>
                   <button>1H</button>
                   <button>4H</button>
                   <button>1D</button>
+                  <button>1W</button>
                   <button onclick="resetChart()" class="btn-icon">↺</button>
                   <button onclick="toggleFullscreen()" class="btn-icon">⛶</button>
                 </div>
               </div>
 
               <div class="chart-area-wrapper">
-                
-                <div id="chart-legend" style="position: absolute; pointer-events: none; z-index: 20"></div>
+                <div
+                  id="chart-legend"
+                  style="position: absolute; pointer-events: none; z-index: 20"
+                ></div>
 
                 <div class="trading-panel">
-                    <button class="btn-sell" onclick="placeOrder('SELL')">SELL</button>
-                    <div class="qty-control">
-                      <button onclick="adjustQty(-0.5)">−</button>
-                      <input type="number" id="trade-qty" value="1" step="0.5" />
-                      <button onclick="adjustQty(0.5)">+</button>
-                    </div>
-                    <button class="btn-buy" onclick="placeOrder('BUY')">BUY</button>
+                  <button class="btn-sell" onclick="placeOrder('SELL')">
+                    SELL
+                  </button>
+                  <div class="qty-control">
+                    <button onclick="adjustQty(-0.5)">−</button>
+                    <input
+                      type="number"
+                      id="trade-qty"
+                      value="1"
+                      min="1"
+                      step="0.5"
+                    />
+                    <button onclick="adjustQty(0.5)">+</button>
+                  </div>
+                  <button class="btn-buy" onclick="placeOrder('BUY')">
+                    BUY
+                  </button>
                 </div>
 
                 <div id="trade-labels-left" class="trade-label-container"></div>
 
                 <div id="hover-menu" class="chart-hover-menu"></div>
-                
-                <div id="chart-container" style="width: 100%; height: 100%"></div>
-              </div>
-          </div>
 
+                <div
+                  id="chart-container"
+                  style="width: 100%; height: 100%"
+                ></div>
+              </div>
+            </div>
+          </div>
           <div class="section-container">
-            <div class="section-header" onclick="toggleSection('positions-wrapper', this)">
-                <h2 style="font-size: 16px;">Open Positions</h2>
-                <button class="btn-collapse">▼</button>
+            <div
+              class="section-header"
+              onclick="toggleSection('positions-wrapper', this)"
+            >
+              <h2 style="font-size: 16px">Open Positions</h2>
+              <button class="btn-collapse">▼</button>
             </div>
             <div id="positions-wrapper" class="table-wrapper">
-                <div style="overflow-x: auto;">
-                    <table class="data-table" id="positions-table">
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Qty</th>
-                          <th>Avg. Price</th>
-                          <th>LTP</th>
-                          <th>Stop Loss</th>
-                          <th>Target</th>
-                          <th>Profit / Loss</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody></tbody>
-                    </table>
-                </div>
+              <div style="overflow-x: auto">
+                <table class="data-table" id="positions-table">
+                  <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Qty</th>        <th>Avg. Price</th> <th>LTP</th>        <th>Stop Loss</th>  <th>Target</th>     <th>Profit/Loss</th><th>Action</th>
+                    </tr>
+                </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
           </div>
 
           <div class="section-container">
-            <div class="section-header" onclick="toggleSection('history-wrapper', this)">
-                <h2 style="font-size: 16px;">History</h2>
-                <button class="btn-collapse">▼</button>
+            <div
+              class="section-header"
+              onclick="toggleSection('history-wrapper', this)"
+            >
+              <h2 style="font-size: 16px">History</h2>
+              <button class="btn-collapse">▼</button>
             </div>
             <div id="history-wrapper" class="table-wrapper">
-                 <div style="overflow-x: auto;">
-                    <table class="data-table" id="history-table">
-                      <thead>
-                        <tr>
-                          <th>Time</th>
-                          <th>Symbol</th>
-                          <th>Type</th>
-                          <th>Qty</th>
-                          <th>Price</th>
-                          <th>Profit / Loss</th>
-                        </tr>
-                      </thead>
-                      <tbody></tbody>
-                    </table>
-                 </div>
+              <div style="overflow-x: auto">
+                <table class="data-table" id="history-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Symbol</th>
+                      <th>Type</th>
+                      <th>Vol</th>
+                      <th>Entry</th>
+                      <th>Price</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
           </div>
-
         </div>
       </main>
     </div>
@@ -206,15 +238,10 @@
                 <label>Broker Server</label
                 ><input type="text" id="inp-server" class="styled-input" />
               </div>
-              
               <div class="input-group">
-                <label>Password</label>
-                <div class="password-wrapper">
-                    <input type="password" id="inp-pass" class="styled-input" />
-                    <span class="password-toggle" onclick="togglePassword()">👁️</span>
-                </div>
+                <label>Password</label
+                ><input type="password" id="inp-pass" class="styled-input" />
               </div>
-
               <div class="input-group" style="grid-column: 1 / -1">
                 <label>Terminal Path (.exe)</label
                 ><input type="text" id="inp-path" class="styled-input" />

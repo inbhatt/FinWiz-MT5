@@ -99,6 +99,7 @@ def sync_all_accounts_data(user_id):
     global SYSTEM_STATE
     if not user_id: return
 
+    # Prevent stacking syncs
     if lock.locked(): return
 
     try:
@@ -106,38 +107,10 @@ def sync_all_accounts_data(user_id):
         docs = accs_ref.where('IS_ACTIVE', '==', True).get()
         db_accounts = [dict(d.to_dict(), ID=d.id) for d in docs]
 
-        # 1. Capture valid Login IDs from the DB (Enabled Accounts)
-        valid_db_logins = set()
-        active_paths = set()
-
-        for acc in db_accounts:
-            try:
-                login_id = int(acc.get('USER', 0))
-                if login_id: valid_db_logins.add(login_id)
-
-                path = acc.get('TERMINAL_PATH')
-                if path: active_paths.add(path)
-            except:
-                pass
+        if not db_accounts: return
 
         with lock:
             SYSTEM_STATE["last_update"] = time.time()
-
-            # Fix: Reset master_path if it belongs to a disabled account
-            if SYSTEM_STATE["master_path"] and SYSTEM_STATE["master_path"] not in active_paths:
-                SYSTEM_STATE["master_path"] = None
-
-            # 2. Prune Disabled Accounts from Cache
-            # We do this BEFORE updating to ensure clean state, or AFTER to clean up.
-            # Doing it here ensures we don't carry over disabled accounts.
-            current_cached_logins = list(SYSTEM_STATE["accounts"].keys())
-            for cached_login in current_cached_logins:
-                if cached_login not in valid_db_logins:
-                    del SYSTEM_STATE["accounts"][cached_login]
-                    print(f"Removed disabled account from cache: {cached_login}")
-
-            if not db_accounts:
-                return
 
             for acc in db_accounts:
                 path = acc.get('TERMINAL_PATH')
@@ -150,8 +123,9 @@ def sync_all_accounts_data(user_id):
                     info = mt5.account_info()
                     raw_pos = mt5.positions_get()
 
+                    # Fetch History
                     from_date = datetime.now() - timedelta(days=30)
-                    to_date = datetime.now() + timedelta(days=2)
+                    to_date = datetime.now() + timedelta(days=1)
                     raw_deals = mt5.history_deals_get(from_date, to_date)
 
                     if info:
@@ -171,13 +145,21 @@ def sync_all_accounts_data(user_id):
 
                         hist_list = []
                         if raw_deals:
+                            # 1. Map Position ID to Entry Price using 'IN' deals
+                            entry_map = {d.position_id: d.price for d in raw_deals if d.entry == mt5.DEAL_ENTRY_IN}
+
                             for d in raw_deals:
                                 if d.entry == mt5.DEAL_ENTRY_OUT:
+                                    # 2. Lookup Entry Price
+                                    entry_price = entry_map.get(d.position_id, 0.0)
+
                                     hist_list.append({
                                         "time": datetime.fromtimestamp(d.time).strftime('%Y-%m-%d %H:%M'),
                                         "timestamp": int(d.time), "symbol": d.symbol,
                                         "type": "BUY" if d.type == 1 else "SELL",
-                                        "volume": d.volume, "price": d.price,
+                                        "volume": d.volume,
+                                        "price": d.price,  # Exit Price
+                                        "entry_price": entry_price,  # NEW: Entry Price
                                         "profit": d.profit + d.swap + d.commission,
                                         "account": acc.get('NAME')
                                     })
@@ -190,7 +172,6 @@ def sync_all_accounts_data(user_id):
 
             if SYSTEM_STATE["master_path"]:
                 switch_context(SYSTEM_STATE["master_path"])
-
     except Exception as e:
         print(f"Sync Error: {e}")
 
@@ -507,8 +488,16 @@ def get_candles():
         actual_sym = get_actual_symbol(symbol)
 
         # Added 5M support
-        tf_map = {'5M': mt5.TIMEFRAME_M5, '1H': mt5.TIMEFRAME_H1, '4H': mt5.TIMEFRAME_H4,
-                  '1D': mt5.TIMEFRAME_D1, '1M': mt5.TIMEFRAME_M1, '15M': mt5.TIMEFRAME_M15}
+        tf_map = {
+            '1M': mt5.TIMEFRAME_M1,
+            '3M': mt5.TIMEFRAME_M3,
+            '5M': mt5.TIMEFRAME_M5,
+            '15M': mt5.TIMEFRAME_M15,
+            '1H': mt5.TIMEFRAME_H1,
+            '4H': mt5.TIMEFRAME_H4,
+            '1D': mt5.TIMEFRAME_D1,
+            '1W': mt5.TIMEFRAME_W1
+        }
 
         rates = mt5.copy_rates_from_pos(actual_sym, tf_map.get(timeframe, mt5.TIMEFRAME_H1), 0, 1000)
 

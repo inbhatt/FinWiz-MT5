@@ -161,7 +161,7 @@ button#loginBtn:active { transform: scale(0.98); }
     /* Default: Sidebar (260px) + Content */
     grid-template-columns: 260px 1fr;
     /* Default: Header (0px if hidden) + Content */
-    grid-template-rows: 0fr 1fr; 
+    grid-template-rows: 1fr;
     height: 100vh;
     width: 100vw;
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -169,22 +169,13 @@ button#loginBtn:active { transform: scale(0.98); }
 
 /* --- COLLAPSED STATE (Class added via JS) --- */
 .app-container.sidebar-collapsed {
+    padding-top: 10px;
     grid-template-columns: 0px 1fr; /* Sidebar shrinks to 0 */
 }
 
 /* --- HEADER VISIBLE STATE (Class added via JS) --- */
 .app-container.header-visible {
     grid-template-rows: 60px 1fr; /* Header expands */
-}
-
-/* NAVBAR */
-.top-nav {
-    grid-column: 1 / -1;
-    background: rgba(15, 28, 48, 0.95);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--glass-border);
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 20px; z-index: 100;
 }
 
 /* --- TOP STATS BAR --- */
@@ -262,7 +253,7 @@ button#loginBtn:active { transform: scale(0.98); }
     position: absolute;
     top: 15px;
     left: 15px;
-    z-index: 40;
+    z-index: 999;
     background: rgba(15, 20, 35, 0.8);
     border: 1px solid var(--glass-border);
     color: var(--text-white);
@@ -310,8 +301,24 @@ button#loginBtn:active { transform: scale(0.98); }
     overflow-y: auto;
 }
 .dashboard-grid { display: flex; flex-direction: column; height: 100%; gap: 20px; }
-.top-row { display: none; }
-.stats-col { width: 250px; display: flex; flex-direction: column; gap: 15px; }
+.top-row {
+    display: flex;
+    gap: 20px;
+    height: 70vh; /* Adjust height for chart */
+    min-height: 500px;
+}
+
+.stats-col {
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    transition: all 0.3s ease;
+}
+
+.stats-col.hidden {
+    display: none;
+}
 
 /* SHARED CARDS */
 .stat-card, .chart-col, .section-container {
@@ -331,7 +338,14 @@ button#loginBtn:active { transform: scale(0.98); }
 .text-red { color: #ff5555 !important; font-weight: 700; }
 
 /* Chart */
-.chart-col { flex: 1; position: relative; display: flex; flex-direction: column; padding: 15px; overflow: hidden; }
+.chart-col {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 15px;
+    overflow: hidden;
+}
 
 .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; height: 50px; }
 .chart-header h2 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: -0.5px; }
