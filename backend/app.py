@@ -436,6 +436,27 @@ def place_trade():
             }
 
             if order_type == 'LIMIT':
+                # --- NEW: Check for Opposing Pending Orders ---
+                current_orders = mt5.orders_get(symbol=act_sym)
+                if current_orders:
+                    # Define what constitutes an "opposing" order
+                    # If Action is BUY, Opposing is SELL LIMIT/STOP
+                    opposing_types = [mt5.ORDER_TYPE_SELL_LIMIT, mt5.ORDER_TYPE_SELL_STOP,
+                                      mt5.ORDER_TYPE_SELL_STOP_LIMIT] \
+                        if action == 'BUY' else \
+                        [mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP, mt5.ORDER_TYPE_BUY_STOP_LIMIT]
+
+                    has_opposing = False
+                    for o in current_orders:
+                        if o.type in opposing_types:
+                            has_opposing = True
+                            break
+
+                    if has_opposing:
+                        results.append(f"{acc.get('NAME')}: Blocked. Opposing Pending Order Exists.")
+                        continue  # Skip this account, move to next
+
+            if order_type == 'LIMIT':
                 req["action"] = mt5.TRADE_ACTION_PENDING
                 req["type"] = mt5.ORDER_TYPE_BUY_LIMIT if action == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
                 req["price"] = float(limit_price)
@@ -647,6 +668,41 @@ def modify_trade():
 
     sync_all_accounts_data(user_id)
     return jsonify({"message": "Modified", "details": results})
+
+
+@app.route('/api/order/cancel', methods=['POST'])
+def cancel_order_endpoint():
+    data = request.json
+    user_id = data.get('user_id')
+    ticket = int(data.get('ticket'))
+
+    docs = db.collection('USERS').document(user_id).collection('ACCOUNTS').where('IS_ACTIVE', '==', True).get()
+
+    result = "Order not found"
+    success = False
+
+    with lock:
+        for doc in docs:
+            acc = doc.to_dict()
+            if switch_context(acc.get('TERMINAL_PATH')):
+                # Check if order exists
+                orders = mt5.orders_get(ticket=ticket)
+                if orders:
+                    req = {
+                        "action": mt5.TRADE_ACTION_REMOVE,
+                        "order": ticket
+                    }
+                    res = mt5.order_send(req)
+                    if res.retcode == mt5.TRADE_RETCODE_DONE:
+                        success = True
+                        result = "Cancelled"
+                    else:
+                        result = f"Failed: {res.comment}"
+                    break
+
+    time.sleep(0.5)
+    sync_all_accounts_data(user_id)
+    return jsonify({"success": success, "message": result})
 
 
 @app.route('/api/candles', methods=['GET'])
