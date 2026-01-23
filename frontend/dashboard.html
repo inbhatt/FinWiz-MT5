@@ -25,6 +25,10 @@
         </div>
 
         <div class="sidebar-footer">
+          <div class="nav-item" onclick="openHistoryModal()">
+            <span style="margin-right: 10px">📜</span>
+            <span class="nav-text">History</span>
+          </div>
           <div class="nav-item" onclick="openAccountModal()">
             <span style="margin-right: 10px">👥</span>
             <span class="nav-text">Accounts</span>
@@ -96,7 +100,9 @@
                   <button>1D</button>
                   <button>1W</button>
                   <button onclick="resetChart()" class="btn-icon">↺</button>
-                  <button onclick="toggleFullscreen()" class="btn-icon">⛶</button>
+                  <button onclick="toggleFullscreen()" class="btn-icon">
+                    ⛶
+                  </button>
                 </div>
               </div>
 
@@ -106,26 +112,6 @@
                   style="position: absolute; pointer-events: none; z-index: 20"
                 ></div>
 
-                <div class="trading-panel">
-                  <button class="btn-sell" onclick="placeOrder('SELL')">
-                    SELL
-                  </button>
-                  <div class="qty-control">
-                    <button onclick="adjustQty(-0.5)">−</button>
-                    <input
-                      type="number"
-                      id="trade-qty"
-                      value="1"
-                      min="1"
-                      step="0.5"
-                    />
-                    <button onclick="adjustQty(0.5)">+</button>
-                  </div>
-                  <button class="btn-buy" onclick="placeOrder('BUY')">
-                    BUY
-                  </button>
-                </div>
-
                 <div id="trade-labels-left" class="trade-label-container"></div>
 
                 <div id="hover-menu" class="chart-hover-menu"></div>
@@ -134,6 +120,34 @@
                   id="chart-container"
                   style="width: 100%; height: 100%"
                 ></div>
+              </div>
+              <div class="trading-panel">
+                <button
+                  class="btn-sell-limit"
+                  onclick="toggleLimitMode('SELL')"
+                >
+                  Sell Limit
+                </button>
+                <button class="btn-sell" onclick="placeOrder('SELL')">
+                  SELL
+                </button>
+
+                <div class="qty-control">
+                  <button onclick="adjustQty(-0.5)">−</button>
+                  <input
+                    type="number"
+                    id="trade-qty"
+                    value="1"
+                    min="1"
+                    step="0.5"
+                  />
+                  <button onclick="adjustQty(0.5)">+</button>
+                </div>
+
+                <button class="btn-buy" onclick="placeOrder('BUY')">BUY</button>
+                <button class="btn-buy-limit" onclick="toggleLimitMode('BUY')">
+                  Buy Limit
+                </button>
               </div>
             </div>
           </div>
@@ -150,36 +164,14 @@
                 <table class="data-table" id="positions-table">
                   <thead>
                     <tr>
-                        <th>Symbol</th>
-                        <th>Qty</th>        <th>Avg. Price</th> <th>LTP</th>        <th>Stop Loss</th>  <th>Target</th>     <th>Profit/Loss</th><th>Action</th>
-                    </tr>
-                </thead>
-                  <tbody></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          <div class="section-container">
-            <div
-              class="section-header"
-              onclick="toggleSection('history-wrapper', this)"
-            >
-              <h2 style="font-size: 16px">History</h2>
-              <button class="btn-collapse">▼</button>
-            </div>
-            <div id="history-wrapper" class="table-wrapper">
-              <div style="overflow-x: auto">
-                <table class="data-table" id="history-table">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
                       <th>Symbol</th>
-                      <th>Type</th>
-                      <th>Vol</th>
-                      <th>Entry</th>
-                      <th>Price</th>
-                      <th>Profit</th>
+                      <th>Qty</th>
+                      <th>Avg. Price</th>
+                      <th>LTP</th>
+                      <th>Stop Loss</th>
+                      <th>Target</th>
+                      <th>Profit/Loss</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
@@ -189,6 +181,33 @@
           </div>
         </div>
       </main>
+    </div>
+
+    <div id="history-modal" class="modal-overlay" style="display: none">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>Trade History</h3>
+          <button class="btn-icon" onclick="closeHistoryModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div style="overflow-x: auto">
+            <table class="data-table" id="history-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Type</th>
+                  <th>Vol</th>
+                  <th>Entry</th>
+                  <th>Price</th>
+                  <th>Profit</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="error-modal" style="display: none" class="modal-overlay">

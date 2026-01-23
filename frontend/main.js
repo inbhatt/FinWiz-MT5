@@ -10,11 +10,15 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1280,
         height: 800,
+        show: false,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
         }
     });
+
+    mainWindow.maximize();
+    mainWindow.show();
 
     mainWindow.removeMenu();
     mainWindow.loadFile('frontend/index.html');

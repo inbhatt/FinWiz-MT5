@@ -112,6 +112,12 @@ def sync_all_accounts_data(user_id):
         with lock:
             SYSTEM_STATE["last_update"] = time.time()
 
+            # Reset aggregators
+            total_balance = 0.0
+            total_equity = 0.0
+            global_positions = []
+            global_orders = []  # NEW: Aggregated pending orders
+
             for acc in db_accounts:
                 path = acc.get('TERMINAL_PATH')
                 if not path: continue
@@ -130,27 +136,59 @@ def sync_all_accounts_data(user_id):
 
                     if info:
                         acc_login = int(info.login)
+                        total_balance += info.balance
+                        total_equity += info.equity
+
                         pos_list = []
+                        orders_list = []  # Local list for this account
+
+                        # 1. POSITIONS
                         if raw_pos:
                             for p in raw_pos:
                                 sym_info = mt5.symbol_info(p.symbol)
                                 c_size = sym_info.trade_contract_size if sym_info else 100000.0
-                                pos_list.append({
+
+                                pos_obj = {
                                     "ticket": p.ticket, "symbol": p.symbol, "type": "BUY" if p.type == 0 else "SELL",
                                     "volume": p.volume, "price_open": p.price_open, "sl": p.sl, "tp": p.tp,
                                     "profit": p.profit, "swap": p.swap, "contract_size": c_size,
                                     "account": acc.get('NAME')
-                                })
+                                }
+                                pos_list.append(pos_obj)
+                                global_positions.append(pos_obj)  # Add to global
                                 SYSTEM_STATE["prices"][p.symbol] = p.price_current
 
+                        # 2. PENDING ORDERS (NEW)
+                        raw_orders = mt5.orders_get()
+                        if raw_orders:
+                            for o in raw_orders:
+                                # Determine Type (Limit vs Stop)
+                                # For simplicity, we map Buy Limit/Stop to BUY and Sell Limit/Stop to SELL
+                                # You can add more granular types if needed
+                                order_side = "BUY" if o.type in [mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP,
+                                                                 mt5.ORDER_TYPE_BUY_STOP_LIMIT] else "SELL"
+
+                                order_obj = {
+                                    "ticket": o.ticket,
+                                    "symbol": o.symbol,
+                                    "type": order_side,
+                                    "order_type": "LIMIT",  # Simplified for UI
+                                    "volume": o.volume_current,
+                                    "price_open": o.price_open,  # Entry Price
+                                    "sl": o.sl,
+                                    "tp": o.tp,
+                                    "account": acc.get('NAME', 'Unknown')
+                                }
+                                orders_list.append(order_obj)
+                                global_orders.append(order_obj)  # Add to global
+
+                        # 3. HISTORY
                         hist_list = []
                         if raw_deals:
-                            # 1. Map Position ID to Entry Price using 'IN' deals
                             entry_map = {d.position_id: d.price for d in raw_deals if d.entry == mt5.DEAL_ENTRY_IN}
 
                             for d in raw_deals:
                                 if d.entry == mt5.DEAL_ENTRY_OUT:
-                                    # 2. Lookup Entry Price
                                     entry_price = entry_map.get(d.position_id, 0.0)
 
                                     hist_list.append({
@@ -158,20 +196,33 @@ def sync_all_accounts_data(user_id):
                                         "timestamp": int(d.time), "symbol": d.symbol,
                                         "type": "BUY" if d.type == 1 else "SELL",
                                         "volume": d.volume,
-                                        "price": d.price,  # Exit Price
-                                        "entry_price": entry_price,  # NEW: Entry Price
+                                        "price": d.price,
+                                        "entry_price": entry_price,
                                         "profit": d.profit + d.swap + d.commission,
                                         "account": acc.get('NAME')
                                     })
 
+                        # Update Account Specific State
                         SYSTEM_STATE["accounts"][acc_login] = {
-                            "name": acc.get('NAME'), "balance": info.balance, "margin_used": info.margin,
-                            "positions": pos_list, "history": hist_list, "path": path,
+                            "name": acc.get('NAME'),
+                            "balance": info.balance,
+                            "margin_used": info.margin,
+                            "positions": pos_list,
+                            "orders": orders_list,  # Store here too
+                            "history": hist_list,
+                            "path": path,
                             "config": acc.get('SYMBOL_CONFIG', {})
                         }
 
+            # Update Global Aggregates (Crucial for Frontend Dashboard)
+            SYSTEM_STATE["balance"] = total_balance
+            SYSTEM_STATE["equity"] = total_equity
+            SYSTEM_STATE["positions"] = global_positions
+            SYSTEM_STATE["orders"] = global_orders  # <--- This is what the frontend reads
+
             if SYSTEM_STATE["master_path"]:
                 switch_context(SYSTEM_STATE["master_path"])
+
     except Exception as e:
         print(f"Sync Error: {e}")
 
@@ -189,6 +240,7 @@ def get_dashboard_data():
     total_margin_used = 0.0
     master_map = {}
     all_history = []
+    all_orders = []
 
     active_symbols = set()
 
@@ -198,6 +250,7 @@ def get_dashboard_data():
     if current_accounts:
         for _, acc in current_accounts:
             for p in acc['positions']: active_symbols.add(p['symbol'])
+            all_orders.extend(acc.get('orders', []))
 
     watchlist_str = request.args.get('watchlist', '')
     if watchlist_str:
@@ -292,6 +345,7 @@ def get_dashboard_data():
         "margin_used": round(total_margin_used, 2),
         "profit": round(total_equity - total_balance, 2),
         "positions": final_positions, "history": all_history[:50],
+        "orders": all_orders,
         "prices": current_prices
     })
 
@@ -304,6 +358,12 @@ def place_trade():
     req_symbol = data.get('symbol')
     action = data.get('type')
 
+    # NEW: Get Order Details
+    order_type = data.get('order_type', 'MARKET')  # 'MARKET' or 'LIMIT'
+    limit_price = data.get('price')
+    req_sl = data.get('sl')
+    req_tp = data.get('tp')
+
     # 1. Get Multiplier from frontend
     multiplier = float(data.get('volume', 1.0))
 
@@ -313,6 +373,8 @@ def place_trade():
 
     opposing = 1 if action == 'BUY' else 0
     blocked = False
+
+    # [Blocking Logic - same as before]
     with lock:
         for doc in docs:
             acc = doc.to_dict()
@@ -334,23 +396,24 @@ def place_trade():
                 continue
 
             act_sym = get_actual_symbol(req_symbol)
-            auto_sl, auto_tp = 0.0, 0.0
-            for p in mt5.positions_get(symbol=act_sym) or []:
-                if p.type == target_type: auto_sl, auto_tp = p.sl, p.tp; break
 
-            # 2. Get Account Specific Base Volume
+            # Auto-SL Logic (Only used for Market orders to match existing behavior)
+            auto_sl, auto_tp = 0.0, 0.0
+            if order_type == 'MARKET':
+                for p in mt5.positions_get(symbol=act_sym) or []:
+                    if p.type == target_type: auto_sl, auto_tp = p.sl, p.tp; break
+
+            # 2. Get Account Specific Base Volume (Same as before)
             config = acc.get('SYMBOL_CONFIG', {})
-            base_vol = 0.01  # Safe default
+            base_vol = 0.01
 
             if req_symbol in config:
-                # Config might be saved as object {"VOLUME": 0.05} or directly
                 val = config[req_symbol]
                 if isinstance(val, dict):
                     base_vol = float(val.get('VOLUME', 0.01))
                 else:
                     base_vol = float(val)
             else:
-                # Fallback to symbol min volume
                 s_info = mt5.symbol_info(act_sym)
                 if s_info: base_vol = s_info.volume_min
 
@@ -363,14 +426,31 @@ def place_trade():
                 results.append(f"{acc.get('NAME')}: Price not found for {act_sym}")
                 continue
 
+            # --- MODIFIED ORDER REQUEST ---
             req = {
-                "action": mt5.TRADE_ACTION_DEAL, "symbol": act_sym, "volume": vol,
-                "type": mt5.ORDER_TYPE_BUY if action == 'BUY' else mt5.ORDER_TYPE_SELL,
-                "price": tick.ask if action == 'BUY' else tick.bid, "magic": 234000,
-                "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
+                "symbol": act_sym,
+                "volume": vol,
+                "magic": 234000,
+                "type_time": mt5.ORDER_TIME_GTC,
+                # Note: FOK is usually for execution, pending orders typically don't strictly need it or use RETURN
             }
-            if auto_sl > 0: req['sl'] = auto_sl
-            if auto_tp > 0: req['tp'] = auto_tp
+
+            if order_type == 'LIMIT':
+                req["action"] = mt5.TRADE_ACTION_PENDING
+                req["type"] = mt5.ORDER_TYPE_BUY_LIMIT if action == 'BUY' else mt5.ORDER_TYPE_SELL_LIMIT
+                req["price"] = float(limit_price)
+                if req_sl: req['sl'] = float(req_sl)
+                if req_tp: req['tp'] = float(req_tp)
+                # Remove filling mode for pending orders to be safe, or use ORDER_FILLING_RETURN
+                req["type_filling"] = mt5.ORDER_FILLING_RETURN
+            else:
+                # MARKET ORDER
+                req["action"] = mt5.TRADE_ACTION_DEAL
+                req["type"] = mt5.ORDER_TYPE_BUY if action == 'BUY' else mt5.ORDER_TYPE_SELL
+                req["price"] = tick.ask if action == 'BUY' else tick.bid
+                req["type_filling"] = mt5.ORDER_FILLING_FOK
+                if auto_sl > 0: req['sl'] = auto_sl
+                if auto_tp > 0: req['tp'] = auto_tp
 
             res = mt5.order_send(req)
 
@@ -428,17 +508,62 @@ def close_trade():
     return jsonify({"message": "Closed", "details": results})
 
 
+@app.route('/api/order/modify', methods=['POST'])
+def modify_order():
+    data = request.json
+    user_id = data.get('user_id')
+    ticket = int(data.get('ticket'))
+    price = float(data.get('price'))
+    sl = float(data.get('sl'))
+    tp = float(data.get('tp'))
+
+    # Logic to find which account owns this ticket could be optimized
+    # but for now we iterate (or you can send account_id from frontend)
+
+    docs = db.collection('USERS').document(user_id).collection('ACCOUNTS').where('IS_ACTIVE', '==', True).get()
+
+    result = "Order not found"
+    success = False
+
+    with lock:
+        for doc in docs:
+            acc = doc.to_dict()
+            if switch_context(acc.get('TERMINAL_PATH')):
+                # Check if order exists here
+                orders = mt5.orders_get(ticket=ticket)
+                if orders:
+                    o = orders[0]
+                    req = {
+                        "action": mt5.TRADE_ACTION_MODIFY,
+                        "order": ticket,
+                        "price": price,
+                        "sl": sl,
+                        "tp": tp,
+                        "type_time": o.type_time,
+                        "type_filling": o.type_filling
+                    }
+                    res = mt5.order_send(req)
+                    if res.retcode == mt5.TRADE_RETCODE_DONE:
+                        success = True
+                        result = "Modified"
+                    else:
+                        result = f"Failed: {res.comment}"
+                    break
+
+    time.sleep(0.5)
+    sync_all_accounts_data(user_id)
+    return jsonify({"success": success, "message": result})
+
+
+# backend/app.py
+
+# backend/app.py
+
 @app.route('/api/modify', methods=['POST'])
 def modify_trade():
     data = request.json
     user_id = data.get('user_id')
-    req_ticket = str(data.get('ticket'))
-
-    parts = req_ticket.split('_')
-    symbol_raw = parts[0]
-    p_type = 0 if parts[1] == 'BUY' else 1
-    target_login = int(parts[2]) if len(parts) > 2 else None
-
+    req_ticket = data.get('ticket')  # Can be int or string
     req_sl = data.get('sl')
     req_tp = data.get('tp')
 
@@ -446,28 +571,79 @@ def modify_trade():
     docs = accs_ref.where('IS_ACTIVE', '==', True).get()
     results = []
 
+    # 1. Try to detect if it's a specific numeric ticket
+    target_ticket_int = None
+    try:
+        target_ticket_int = int(req_ticket)
+    except:
+        pass
+
     with lock:
         for doc in docs:
             acc = doc.to_dict()
-            acc_login = int(acc.get('USER'))
-            if target_login and acc_login != target_login: continue
-
+            acc_login = int(acc.get('USER', 0))
             path = acc.get('TERMINAL_PATH')
-            if switch_context(path):
-                # FIX: Resolve symbol
-                act_sym = get_actual_symbol(symbol_raw)
 
-                positions = mt5.positions_get(symbol=act_sym)
-                if positions:
-                    for pos in positions:
-                        if pos.type == p_type:
-                            final_sl = float(req_sl) if req_sl is not None else pos.sl
-                            final_tp = float(req_tp) if req_tp is not None else pos.tp
-                            req = {"action": mt5.TRADE_ACTION_SLTP, "position": pos.ticket, "sl": final_sl,
-                                   "tp": final_tp}
-                            res = mt5.order_send(req)
-                            if res.retcode != mt5.TRADE_RETCODE_DONE:
-                                results.append(f"Modify Failed on {acc_login}: {res.comment}")
+            # 2. Logic from your old code: Filter by login if present in string
+            # Format expected: SYMBOL_TYPE_LOGIN (e.g. XAUUSD_BUY_1001)
+            target_login_from_str = None
+            if not target_ticket_int and isinstance(req_ticket, str) and '_' in req_ticket:
+                parts = req_ticket.split('_')
+                if len(parts) > 2:
+                    try:
+                        target_login_from_str = int(parts[2])
+                    except:
+                        pass
+
+            if target_login_from_str and acc_login != target_login_from_str:
+                continue
+
+            if switch_context(path):
+                # CASE A: Specific Integer Ticket (Account Specific TP/SL)
+                if target_ticket_int:
+                    pos_tuple = mt5.positions_get(ticket=target_ticket_int)
+                    if pos_tuple:
+                        pos = pos_tuple[0]
+                        final_sl = float(req_sl) if req_sl is not None else pos.sl
+                        final_tp = float(req_tp) if req_tp is not None else pos.tp
+                        req = {
+                            "action": mt5.TRADE_ACTION_SLTP,
+                            "position": pos.ticket,
+                            "sl": final_sl,
+                            "tp": final_tp
+                        }
+                        res = mt5.order_send(req)
+                        if res.retcode == mt5.TRADE_RETCODE_DONE:
+                            results.append(f"Modified #{pos.ticket} on {acc.get('NAME')}")
+                        else:
+                            results.append(f"Failed #{pos.ticket}: {res.comment}")
+                        break  # Found it, stop looking
+
+                # CASE B: Aggregated String (Your old logic)
+                elif isinstance(req_ticket, str) and '_' in req_ticket:
+                    parts = req_ticket.split('_')
+                    # Ensure we have at least Symbol and Type
+                    if len(parts) >= 2:
+                        symbol_raw = parts[0]
+                        p_type = 0 if parts[1] == 'BUY' else 1
+
+                        act_sym = get_actual_symbol(symbol_raw)
+                        positions = mt5.positions_get(symbol=act_sym)
+
+                        if positions:
+                            for pos in positions:
+                                if pos.type == p_type:
+                                    final_sl = float(req_sl) if req_sl is not None else pos.sl
+                                    final_tp = float(req_tp) if req_tp is not None else pos.tp
+                                    req = {
+                                        "action": mt5.TRADE_ACTION_SLTP,
+                                        "position": pos.ticket,
+                                        "sl": final_sl,
+                                        "tp": final_tp
+                                    }
+                                    res = mt5.order_send(req)
+                                    if res.retcode != mt5.TRADE_RETCODE_DONE:
+                                        results.append(f"Failed {pos.ticket}: {res.comment}")
 
     sync_all_accounts_data(user_id)
     return jsonify({"message": "Modified", "details": results})

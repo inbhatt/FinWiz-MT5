@@ -20,9 +20,20 @@ let lastHoveredTime = null;
 
 let menuHideTimer = null;
 
+limitOrderState = {
+  active: false,
+  isEdit: false, // NEW
+  editTicket: null, // NEW
+  type: 'BUY', 
+  entryPrice: 0,
+  tpPrice: 0,
+  slPrice: 0,
+  lines: { entry: null, tp: null, sl: null }
+};
+let pendingOrderLines = {};
+
 // NEW: Missing State Variables Fixed
 let isSidebarCollapsed = false;
-let isHeaderVisible = false;
 
 // --- COLORS ---
 const COL_BUY = "#2962ff";
@@ -165,18 +176,19 @@ async function fetchDashboardData() {
       console.log("Sync Error:", data.error);
       return;
     }
+    
+    // --- [NEW] SAVE TO GLOBAL STATE ---
+    window.SYSTEM_STATE = data;
+    // Ensure orders array exists
+    if (!window.SYSTEM_STATE.orders) window.SYSTEM_STATE.orders = [];
 
-    // --- UPDATED STATS POPULATION ---
-
-    // Balance
+    // --- STATS POPULATION (Existing) ---
     const balEl = document.getElementById("val-balance");
     if (balEl) balEl.innerText = `$${data.balance.toFixed(2)}`;
 
-    // Equity (Added)
     const eqEl = document.getElementById("val-equity");
     if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
 
-    // Profit / Loss
     const plEl = document.getElementById("val-pl");
     if (plEl) {
       plEl.innerText = `$${data.profit.toFixed(2)}`;
@@ -184,17 +196,15 @@ async function fetchDashboardData() {
         data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
     }
 
-    // Free Margin
     const powerEl = document.getElementById("val-power");
     if (powerEl) powerEl.innerText = `$${data.margin_free.toFixed(2)}`;
 
-    // Update Progress Bar
     const usedMargin = data.balance - data.margin_free;
     const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
     const bar = document.querySelector(".progress-fill");
     if (bar) bar.style.width = `${usagePct}%`;
 
-    // ... (Keep rest of function: positions, history, etc.) ...
+    // ... (Rest of update) ...
     if (data.prices) updateWatchlistPrices(data.prices);
     renderPositions(data.positions);
     renderHistory(data.history);
@@ -204,6 +214,11 @@ async function fetchDashboardData() {
     } else {
       updateChartPositions(data.positions);
     }
+    
+    // --- [NEW] RENDER PENDING ORDERS ---
+    // Pass the orders explicitly
+    renderPendingOrders(data.orders);
+
   } catch (e) {
     console.log("Network Error:", e);
   }
@@ -375,6 +390,58 @@ function renderPositions(positions) {
   });
 }
 
+// frontend/dashboard.js
+
+function updateMainButtonText(type) {
+    const buyBtn = document.querySelector('.btn-buy');
+    const sellBtn = document.querySelector('.btn-sell');
+    
+    if (type === 'BUY') {
+        if(buyBtn) {
+            buyBtn.innerText = "PLACE LIMIT";
+            buyBtn.classList.add("btn-limit-active");
+            // FORCE ENABLE
+            buyBtn.style.opacity = "1";
+            buyBtn.style.pointerEvents = "auto";
+        }
+        if(sellBtn) {
+            sellBtn.style.opacity = "0.3"; 
+            sellBtn.style.pointerEvents = "none";
+        }
+    } else {
+        if(sellBtn) {
+            sellBtn.innerText = "PLACE LIMIT";
+            sellBtn.classList.add("btn-limit-active");
+            // FORCE ENABLE
+            sellBtn.style.opacity = "1";
+            sellBtn.style.pointerEvents = "auto";
+        }
+        if(buyBtn) {
+            buyBtn.style.opacity = "0.3";
+            buyBtn.style.pointerEvents = "none";
+        }
+    }
+}
+
+// 2. UPDATE resetMainButtonText (Complete Reset)
+function resetMainButtonText() {
+    const buyBtn = document.querySelector('.btn-buy');
+    const sellBtn = document.querySelector('.btn-sell');
+    
+    if(buyBtn) {
+        buyBtn.innerText = "BUY";
+        buyBtn.classList.remove("btn-limit-active");
+        buyBtn.style.opacity = "1";
+        buyBtn.style.pointerEvents = "auto";
+    }
+    if(sellBtn) {
+        sellBtn.innerText = "SELL";
+        sellBtn.classList.remove("btn-limit-active");
+        sellBtn.style.opacity = "1";
+        sellBtn.style.pointerEvents = "auto";
+    }
+}
+
 function renderHistory(history) {
   const tbody = document.querySelector("#history-table tbody");
   if (!tbody) return;
@@ -416,6 +483,198 @@ window.toggleGroup = function (ticket, event, rowElem) {
     if (arrow) arrow.classList.toggle("expanded", isNowExpanded);
   }
 };
+
+function renderPendingOrders(orders) {
+    if (!orders) {
+        if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
+            orders = window.SYSTEM_STATE.orders;
+        } else {
+            orders = [];
+        }
+    }
+
+    // [REQ 3] Filter based on Specific View
+    let targetOrders = orders;
+    if (specificTradeView) {
+         // Assuming specificTradeView matches account name or login. 
+         // Adjust field logic based on what specificTradeView stores.
+         // Since pending orders object has 'account' name, we use that if available.
+         // Or if specificTradeView is an ID, you might need to map it.
+         // Here assuming specificTradeView could be Account Name for simplicity or matched login logic.
+         // For now, let's assume we filter by Symbol first, then context.
+    }
+    
+    // Always filter by current Symbol
+    targetOrders = targetOrders.filter(o => o.symbol.startsWith(currentSymbol));
+
+    // [REQ 3] Aggregate Pending Orders by Price & Type
+    const grouped = {};
+    targetOrders.forEach(o => {
+        // Key: Type + Price (rounded to avoid floating point mismatch)
+        const key = `${o.type}_${o.price_open.toFixed(5)}`; 
+        if (!grouped[key]) {
+            grouped[key] = { ...o, volume: 0, count: 0, tickets: [] };
+        }
+        grouped[key].volume += o.volume;
+        grouped[key].count++;
+        grouped[key].tickets.push(o.ticket);
+    });
+    
+    const aggregatedOrders = Object.values(grouped);
+
+    if (!candleSeries) return;
+
+    // Use a unique ID for pending lines based on Price/Type since we aggregate
+    // Note: We need a mapping to manage lines. 
+    // Simplified: Clear all pending lines and redraw (easiest for aggregation changes)
+    for (let t in pendingOrderLines) {
+        if(pendingOrderLines[t]) candleSeries.removePriceLine(pendingOrderLines[t]);
+    }
+    pendingOrderLines = {};
+
+    aggregatedOrders.forEach(o => {
+        // If editing this specific group (or single ticket), don't show line
+        // (Editing aggregates is complex, disabling hide for now or checking ticket list)
+        if (limitOrderState.active && limitOrderState.isEdit && o.tickets.includes(limitOrderState.editTicket)) return;
+
+        // Use first ticket as key or generate one
+        const key = o.tickets[0]; 
+
+        pendingOrderLines[key] = candleSeries.createPriceLine({
+            price: o.price_open,
+            color: o.type === 'BUY' ? COL_BUY : COL_SELL,
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: "", // Title in Label
+        });
+    });
+
+    renderPendingOrderLabels(aggregatedOrders);
+}
+
+// frontend/dashboard.js
+
+function renderPendingOrderLabels(orders) {
+    const container = document.getElementById("trade-labels-left");
+    if (!container) return;
+    
+    const existingLabels = container.querySelectorAll('.pending-order-label');
+    existingLabels.forEach(el => el.remove());
+
+    orders.forEach(o => {
+        if (limitOrderState.active && limitOrderState.isEdit && o.tickets.includes(limitOrderState.editTicket)) return;
+
+        const y = candleSeries.priceToCoordinate(o.price_open);
+        if (y === null) return;
+
+        const div = document.createElement("div");
+        div.className = "trade-label-tag pending-order-label";
+        div.style.position = "absolute";
+        div.style.left = "0px";
+        div.style.top = `${y}px`;
+        
+        const bgColor = o.type === 'BUY' ? COL_BUY : COL_SELL;
+        div.style.backgroundColor = bgColor; 
+        div.style.color = "white";
+        div.style.border = `1px solid ${bgColor}`;
+        div.style.fontSize = "12px";
+        div.style.padding = "4px 8px";
+        div.style.cursor = "pointer";
+        div.style.pointerEvents = "auto";
+        div.style.zIndex = "50";
+        
+        // [REQ 3] Show Quantity in Label
+        // If aggregated (count > 1), maybe show icon?
+        const qtyText = parseFloat(o.volume.toFixed(2));
+        div.innerText = `⏳ ${o.type} ${qtyText} @ ${o.price_open}`;
+        
+        div.onclick = (e) => {
+            e.stopPropagation();
+            // Only allow edit if it's a single order, otherwise warn or implement bulk edit
+            if (o.count === 1) {
+                startEditOrder(o);
+            } else {
+                alert("Cannot edit aggregated pending orders. Please cancel and recreate.");
+            }
+        };
+        
+        container.appendChild(div);
+    });
+}
+
+// 5. NEW: startEditOrder
+function startEditOrder(order) {
+    // 1. Set State
+    limitOrderState.active = true;
+    limitOrderState.isEdit = true;
+    limitOrderState.editTicket = order.ticket;
+    limitOrderState.type = order.type;
+    limitOrderState.entryPrice = order.price_open;
+    limitOrderState.tpPrice = order.tp;
+    limitOrderState.slPrice = order.sl;
+    
+    // If TP/SL are 0, set defaults for visual editing
+    if (limitOrderState.tpPrice === 0) limitOrderState.tpPrice = order.type === 'BUY' ? order.price_open + 1 : order.price_open - 1;
+    if (limitOrderState.slPrice === 0) limitOrderState.slPrice = order.type === 'BUY' ? order.price_open - 1 : order.price_open + 1;
+
+    // 2. Draw Draggable Lines (Solid)
+    drawLimitLines(); // Reuses existing function
+    
+    // 3. Update UI
+    updateLeftLabels();
+    
+    // 4. Change Main Button Text
+    const btnClass = order.type === 'BUY' ? '.btn-buy' : '.btn-sell';
+    const btn = document.querySelector(btnClass);
+    if (btn) {
+        btn.innerText = "UPDATE ORDER";
+        btn.classList.add("btn-limit-active");
+        btn.onclick = () => submitOrderModification(); // Override click
+    }
+    
+    // Disable opposite button
+    const oppBtn = document.querySelector(order.type === 'BUY' ? '.btn-sell' : '.btn-buy');
+    if (oppBtn) {
+        oppBtn.style.opacity = '0.3';
+        oppBtn.style.pointerEvents = 'none';
+    }
+}
+
+// 6. NEW: submitOrderModification
+async function submitOrderModification() {
+    const payload = {
+        user_id: currentUserId,
+        ticket: limitOrderState.editTicket,
+        price: limitOrderState.entryPrice,
+        tp: limitOrderState.tpPrice,
+        sl: limitOrderState.slPrice
+    };
+    
+    // Show Loading
+    const btn = document.querySelector(limitOrderState.type === 'BUY' ? '.btn-buy' : '.btn-sell');
+    if(btn) btn.classList.add('btn-loading');
+    
+    try {
+        const res = await fetch("http://127.0.0.1:5000/api/order/modify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        
+        if(data.success) {
+            cancelLimitMode(); // Closes edit mode
+            // fetchDashboardData(); // Refresh
+        } else {
+            showError("Modification Failed", data.message);
+        }
+    } catch(e) {
+        showError("Error", e.message);
+    } finally {
+        if(btn) btn.classList.remove('btn-loading');
+    }
+}
 
 async function removeLevel(ticket, type) {
   const normType = type.toLowerCase();
@@ -547,6 +806,18 @@ function updateLeftLabels() {
   if (!container) return;
   container.innerHTML = "";
 
+  if (limitOrderState.active) {
+      try {
+        renderLimitLabels(container);
+      } catch (e) {
+        console.error("Error rendering limit labels:", e);
+      }
+  }
+
+  if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
+        renderPendingOrderLabels(window.SYSTEM_STATE.orders);
+  }
+
   if (!candleSeries) return;
 
   for (let t in priceLines) {
@@ -560,8 +831,10 @@ function updateLeftLabels() {
         data.price_open || data.price,
         data,
       );
-    if (group.tp) renderSingleLabel(container, t, "TP", data.tp, data);
-    if (group.sl) renderSingleLabel(container, t, "SL", data.sl, data);
+    if (!limitOrderState.active) {
+        if (group.tp) renderSingleLabel(container, t, "TP", data.tp, data);
+        if (group.sl) renderSingleLabel(container, t, "SL", data.sl, data);
+    }
   }
 }
 
@@ -573,8 +846,6 @@ function renderSingleLabel(container, ticket, type, price, data) {
   const div = document.createElement("div");
   div.className = "trade-label-tag";
   div.style.top = `${y}px`;
-  
-  // [REQ 1] Reduced Font Size (was 20px)
   div.style.fontSize = "14px"; 
   div.style.padding = "6px 12px";
   div.style.display = "flex";
@@ -585,20 +856,25 @@ function renderSingleLabel(container, ticket, type, price, data) {
   const pl = calculatePL(data.symbol, data.type, data.volume, data.price_open, type === "MAIN" ? data.price_current : price);
   const sign = pl >= 0 ? "+" : "";
   const plColor = pl >= 0 ? "#00b894" : "#ff5555"; 
-
-  // For MAIN: Use colored P/L. For TP/SL: Use White P/L
   const finalPlColor = type === "MAIN" ? plColor : "#ffffff";
   const plHtml = `(<span style="color:${finalPlColor}; font-weight:700;">${sign}$${pl}</span>)`;
 
-  // Determine Close Button Color
-  let closeIconColor = "white"; 
-  if (type === "MAIN") {
-     closeIconColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
-  }
-
+  const contentSpan = document.createElement("span");
+  
   // Close Button
-  const closeBtnHtml = `<span style="margin-left:8px; cursor:pointer; color:${closeIconColor}; font-weight:bold; font-size:18px; line-height: 1;" 
-        onmousedown="event.stopPropagation(); ${type === 'MAIN' ? `closeTrade('${ticket}')` : `removeLevel('${ticket}', '${type}')`}">×</span>`;
+  const closeSpan = document.createElement("span");
+  closeSpan.style.marginLeft = "8px";
+  closeSpan.style.cursor = "pointer";
+  closeSpan.style.fontWeight = "bold";
+  closeSpan.style.fontSize = "18px";
+  closeSpan.style.lineHeight = "1";
+  closeSpan.innerHTML = "×";
+  closeSpan.onclick = async (e) => {
+      e.stopPropagation(); e.preventDefault();
+      closeSpan.innerHTML = ""; closeSpan.className = "loader-spinner-small";
+      if (type === 'MAIN') await closeTrade(ticket);
+      else await removeLevel(ticket, type);
+  };
 
   if (type === "MAIN") {
     const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
@@ -607,79 +883,77 @@ function renderSingleLabel(container, ticket, type, price, data) {
     div.style.fontWeight = "800";
     div.style.border = `2px solid ${typeColor}`;
     div.style.zIndex = "60"; 
-    
-    let labelText = `${data.type} ${data.volume}`;
+    closeSpan.style.color = typeColor;
+
+    // [REQ 2] Show Average Price in Label
+    let labelText = `${data.type} ${data.volume} @ ${data.price_open.toFixed(2)}`;
     if (data.account_name) labelText = `${data.account_name} | ${labelText}`;
     
-    div.innerHTML = `${labelText} ${plHtml} ${closeBtnHtml}`;
+    contentSpan.innerHTML = `${labelText} ${plHtml}`;
     
-  } else if (type === "TP") {
-    // [REQ 3] Updated to darker green
-    div.style.backgroundColor = COL_TP;
+    div.onmouseenter = () => {
+      if (menuHideTimer) clearTimeout(menuHideTimer);
+      showHoverMenuFixed(ticket, type, y, div);
+    };
+    div.onmouseleave = () => {
+      menuHideTimer = setTimeout(() => {
+        document.getElementById("hover-menu").style.display = "none";
+      }, 150);
+    };
+  } 
+  else if (type === "TP" || type === "SL") {
+    const bg = type === "TP" ? COL_TP : COL_SL;
+    div.style.backgroundColor = bg;
     div.style.color = "#ffffff"; 
-    div.innerHTML = `TP ${price} ${plHtml} ${closeBtnHtml}`;
+    closeSpan.style.color = "white";
+    // Also show price in TP/SL label
+    contentSpan.innerHTML = `${type} ${price.toFixed(2)} ${plHtml}`;
+    div.style.cursor = "ns-resize";
+    div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag(ticket, type, price); };
+  } 
 
-  } else if (type === "SL") {
-    div.style.backgroundColor = COL_SL;
-    div.style.color = "#ffffff";
-    div.innerHTML = `SL ${price} ${plHtml} ${closeBtnHtml}`;
-  }
-
-  // Hover menu listeners
-  div.onmouseenter = () => {
-    if (menuHideTimer) clearTimeout(menuHideTimer);
-    showHoverMenuFixed(ticket, type, y, div);
-  };
-  div.onmouseleave = () => {
-    menuHideTimer = setTimeout(() => {
-      document.getElementById("hover-menu").style.display = "none";
-    }, 150);
-  };
-
+  div.appendChild(contentSpan);
+  div.appendChild(closeSpan);
   container.appendChild(div);
 }
 
-// [REQ 1] Updated Hover Menu (Removed redundant Close button)
+// 2. UPDATE showHoverMenuFixed (Allow Menu for Aggregates)
 function showHoverMenuFixed(ticket, type, y, labelElem) {
   const menu = document.getElementById("hover-menu");
   if (!priceLines[ticket]) return;
   const pos = priceLines[ticket].data;
 
   let html = "";
+  
   if (type === "MAIN") {
-    html += `<span style="color:#fff; font-weight:700; font-size:12px; margin-right:5px;">#${ticket}</span>`;
-    if (!pos.tp || pos.tp <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
-    if (!pos.sl || pos.sl <= 0)
-      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
+      // [FIX] Only show buttons if TP/SL are MISSING or INCONSISTENT (value <= 0)
+      if (!pos.tp || pos.tp <= 0)
+        html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
+      
+      if (!pos.sl || pos.sl <= 0)
+        html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
+      
+      // Removed "Close" button from menu since Label has 'x'
   } else if (type === "TP" || type === "SL") {
-    const val = type === "TP" ? pos.tp : pos.sl;
-    const pl = calculatePL(
-      pos.symbol,
-      pos.type,
-      pos.volume,
-      pos.price_open,
-      val,
-    );
-    const colorClass = pl >= 0 ? "pl-green" : "pl-red";
-    
-    // REMOVED: The '×' button from here since it's now on the label
-    html += `<span class="pl-preview ${colorClass}">${pl >= 0 ? "+" : ""}$${pl}</span>`;
-    html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${val})">Move</button>`;
+     // Menu for existing lines (Move)
+     html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${type === "TP" ? pos.tp : pos.sl})">Move</button>`;
+  }
+
+  // If no buttons needed (e.g. both TP and SL are set on Main), Hide Menu
+  if (!html) {
+      menu.style.display = "none";
+      return;
   }
 
   menu.innerHTML = html;
   menu.style.display = "flex";
-
-  menu.style.position = "absolute";
-
+  
   const wrapper = document.querySelector(".chart-area-wrapper");
   if (wrapper) {
     const wrapperRect = wrapper.getBoundingClientRect();
     const labelRect = labelElem.getBoundingClientRect();
     const leftPos = labelRect.right - wrapperRect.left + 10;
     const topPos = labelRect.top - wrapperRect.top + labelRect.height / 2;
-
     menu.style.right = "auto";
     menu.style.left = `${leftPos}px`;
     menu.style.top = `${topPos}px`;
@@ -776,15 +1050,199 @@ function updateLegend(data) {
     `;
 }
 
-function formatDateTime(timestamp) {
-  if (!timestamp) return "";
-  const d = new Date(timestamp * 1000);
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = String(d.getFullYear()).slice(-2);
-  const hours = String(d.getHours()).padStart(2, "0");
-  const mins = String(d.getMinutes()).padStart(2, "0");
-  return `${day}-${month}-${year} ${hours}:${mins}`;
+function toggleLimitMode(type) {
+  // Toggle off if same
+  if (limitOrderState.active && limitOrderState.type === type) {
+    cancelLimitMode();
+    return;
+  }
+  
+  const cmp = latestCandle ? latestCandle.close : 0;
+  if (!cmp || cmp <= 0) return;
+
+  // Reset if switching
+  if (limitOrderState.active) {
+    cancelLimitMode();
+  }
+
+  limitOrderState.active = true;
+  limitOrderState.type = type;
+
+  // Initialize Prices
+  limitOrderState.entryPrice = cmp;
+  
+  if (type === 'BUY') {
+      limitOrderState.tpPrice = cmp + 1.0; 
+      limitOrderState.slPrice = cmp - 1.0; 
+  } else {
+      limitOrderState.tpPrice = cmp - 1.0; 
+      limitOrderState.slPrice = cmp + 1.0; 
+  }
+
+  drawLimitLines();
+  setExistingLinesStyle(LightweightCharts.LineStyle.Dashed);
+  updateLeftLabels(); 
+  
+  // Highlight Button
+  document.querySelectorAll('.btn-buy-limit, .btn-sell-limit').forEach(b => b.classList.remove('active'));
+  const btnClass = type === 'BUY' ? '.btn-buy-limit' : '.btn-sell-limit';
+  const btn = document.querySelector(btnClass);
+  if(btn) btn.classList.add('active');
+
+  // --- NEW: Update Main Button Text ---
+  updateMainButtonText(type);
+}
+
+function cancelLimitMode() {
+  limitOrderState.active = false;
+  limitOrderState.isEdit = false;
+  limitOrderState.editTicket = null;
+  
+  if (limitOrderState.lines.entry) candleSeries.removePriceLine(limitOrderState.lines.entry);
+  if (limitOrderState.lines.tp) candleSeries.removePriceLine(limitOrderState.lines.tp);
+  if (limitOrderState.lines.sl) candleSeries.removePriceLine(limitOrderState.lines.sl);
+  
+  limitOrderState.lines = { entry: null, tp: null, sl: null };
+  
+  setExistingLinesStyle(LightweightCharts.LineStyle.Solid);
+  
+  document.querySelectorAll('.btn-buy-limit, .btn-sell-limit').forEach(b => b.classList.remove('active'));
+  
+  updateLeftLabels();
+
+  const buyBtn = document.querySelector('.btn-buy');
+    const sellBtn = document.querySelector('.btn-sell');
+    if(buyBtn) { buyBtn.onclick = () => placeOrder('BUY'); }
+    if(sellBtn) { sellBtn.onclick = () => placeOrder('SELL'); }
+  
+  // --- NEW: Reset Main Button Text ---
+  resetMainButtonText();
+}
+
+function drawLimitLines() {
+    // Colors
+    const entryColor = limitOrderState.type === 'BUY' ? COL_BUY : COL_SELL;
+    
+    // Create Entry Line
+    limitOrderState.lines.entry = candleSeries.createPriceLine({
+        price: limitOrderState.entryPrice,
+        color: entryColor,
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid, 
+        axisLabelVisible: true,
+        title: 'LIMIT ENTRY',
+    });
+
+    // Create TP Line (Solid, per request to avoid dashed/hidden look)
+    limitOrderState.lines.tp = candleSeries.createPriceLine({
+        price: limitOrderState.tpPrice,
+        color: COL_TP,
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'LIMIT TP',
+    });
+
+    // Create SL Line (Solid)
+    limitOrderState.lines.sl = candleSeries.createPriceLine({
+        price: limitOrderState.slPrice,
+        color: COL_SL,
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'LIMIT SL',
+    });
+}
+
+function setExistingLinesStyle(style) {
+    for (let t in priceLines) {
+        const group = priceLines[t];
+        // Apply style to TP and SL lines only
+        if (group.tp) group.tp.applyOptions({ lineStyle: style });
+        if (group.sl) group.sl.applyOptions({ lineStyle: style });
+    }
+}
+
+function renderLimitLabels(container) {
+    // 1. ENTRY LABEL
+    const qtyInput = document.getElementById('trade-qty');
+    const qty = qtyInput ? (parseFloat(qtyInput.value) || 0) : 0;
+    const yEntry = candleSeries.priceToCoordinate(limitOrderState.entryPrice);
+    if (yEntry !== null) {
+        const div = createLimitLabelDiv(yEntry, "ENTRY");
+        // Background Color: Blue if Buy, Red if Sell
+        const bg = limitOrderState.type === 'BUY' ? COL_BUY : COL_SELL;
+        div.style.backgroundColor = bg;
+        div.style.color = "white"; 
+        div.innerHTML = `Entry ${limitOrderState.entryPrice.toFixed(2)} <span style="margin-left:8px; cursor:pointer;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>`;
+        // Drag
+        div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag('LIMIT', 'ENTRY', limitOrderState.entryPrice); };
+        container.appendChild(div);
+    }
+
+    // 2. TP LABEL
+    const yTp = candleSeries.priceToCoordinate(limitOrderState.tpPrice);
+    if (yTp !== null) {
+        const div = createLimitLabelDiv(yTp, "TP");
+        div.style.backgroundColor = COL_TP;
+        div.style.color = "white";
+        
+        // Calculate P/L
+        let tpProfit = 0;
+        if (limitOrderState.type === 'BUY') {
+            tpProfit = (limitOrderState.tpPrice - limitOrderState.entryPrice) * qty;
+        } else {
+            tpProfit = (limitOrderState.entryPrice - limitOrderState.tpPrice) * qty;
+        }
+        
+        div.innerText = `TP ${limitOrderState.tpPrice.toFixed(2)} ($${tpProfit.toFixed(2)})`;
+        div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag('LIMIT', 'TP', limitOrderState.tpPrice); };
+        container.appendChild(div);
+    }
+
+    // 3. SL LABEL
+    const ySl = candleSeries.priceToCoordinate(limitOrderState.slPrice);
+    if (ySl !== null) {
+        const div = createLimitLabelDiv(ySl, "SL");
+        div.style.backgroundColor = COL_SL;
+        div.style.color = "white";
+        
+        // Calculate P/L
+        let slLoss = 0;
+        if (limitOrderState.type === 'BUY') {
+            slLoss = (limitOrderState.slPrice - limitOrderState.entryPrice) * qty;
+        } else {
+            slLoss = (limitOrderState.entryPrice - limitOrderState.slPrice) * qty;
+        }
+
+        div.innerText = `SL ${limitOrderState.slPrice.toFixed(2)} ($${slLoss.toFixed(2)})`;
+        div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag('LIMIT', 'SL', limitOrderState.slPrice); };
+        container.appendChild(div);
+    }
+}
+
+function createLimitLabelDiv(topY, type) {
+    const div = document.createElement("div");
+    div.className = "trade-label-tag";
+    
+    // explicit positioning
+    div.style.position = "absolute"; 
+    div.style.left = "0px"; 
+    div.style.top = `${topY}px`;
+    
+    // style
+    div.style.fontSize = "14px";
+    div.style.padding = "6px 12px";
+    div.style.display = "flex";
+    div.style.alignItems = "center";
+    div.style.fontWeight = "700";
+    div.style.cursor = "ns-resize";
+    div.style.zIndex = "60";
+    
+    // enable mouse interaction (critical!)
+    div.style.pointerEvents = "auto"; 
+    
+    return div;
 }
 
 // --- UPDATED PL CALCULATION ---
@@ -801,6 +1259,20 @@ function calculatePL(symbol, type, volume, entryPrice, targetPrice) {
 
 // --- DRAG LOGIC ---
 function startDrag(ticket, type, currentPrice) {
+  if (ticket === 'LIMIT') {
+      draggingLine = {
+        ticket: 'LIMIT',
+        type: type, // 'ENTRY', 'TP', 'SL'
+        startPrice: currentPrice
+      };
+      
+      // We don't need a temporary drag line because we update the actual limit lines in real-time
+      // But to keep consistency with existing logic, let's just use the global cursor
+      document.body.style.cursor = "ns-resize";
+      document.addEventListener("mousemove", updateDrag);
+      return;
+  }
+
   const pos = priceLines[ticket].data;
   const entry = pos.price || pos.price_open;
   draggingLine = {
@@ -831,6 +1303,53 @@ function startDrag(ticket, type, currentPrice) {
 }
 
 function updateDrag(e) {
+  if (draggingLine && draggingLine.ticket === 'LIMIT') {
+      const rect = document.getElementById("chart-container").getBoundingClientRect();
+      const price = candleSeries.coordinateToPrice(e.clientY - rect.top);
+      if (!price) return;
+
+      if (draggingLine.type === 'TP') {
+          // TP Restrictions
+          if (limitOrderState.type === 'BUY') {
+              if (price < limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+          } else { // SELL
+              if (price > limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+          }
+      }else if (draggingLine.type === 'SL') {
+          // SL Restrictions
+          if (limitOrderState.type === 'BUY') {
+              if (price > limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+          } else { // SELL
+              if (price < limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+          }
+      }else if (draggingLine.type === 'ENTRY') {
+           // Entry Logic: Shift TP and SL along with Entry to maintain distance
+           const delta = price - limitOrderState.entryPrice;
+           
+           limitOrderState.tpPrice += delta;
+           limitOrderState.slPrice += delta;
+           limitOrderState.entryPrice = price; // Update Entry
+
+           // Update TP/SL Lines immediately for visual feedback
+           if (limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: limitOrderState.tpPrice });
+           if (limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: limitOrderState.slPrice });
+      }
+
+      // Update State
+      if (draggingLine.type === 'ENTRY') limitOrderState.entryPrice = price;
+      if (draggingLine.type === 'TP') limitOrderState.tpPrice = price;
+      if (draggingLine.type === 'SL') limitOrderState.slPrice = price;
+
+      // Update Line Position
+      if (draggingLine.type === 'ENTRY' && limitOrderState.lines.entry) limitOrderState.lines.entry.applyOptions({ price: price });
+      if (draggingLine.type === 'TP' && limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: price });
+      if (draggingLine.type === 'SL' && limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: price });
+      
+      // Update Labels (Re-render)
+      updateLeftLabels();
+      return;
+  }
+
   if (!draggingLine || !dragPriceLine) return;
   const rect = document
     .getElementById("chart-container")
@@ -880,16 +1399,32 @@ function updateDrag(e) {
   dragPriceLine.applyOptions({
     title: `${draggingLine.type}: ${pl >= 0 ? "+" : ""}$${pl}`,
   });
+
+  if (draggingLine && draggingLine.ticket !== 'LIMIT') {
+      // (Keep existing updateDrag logic for normal positions here)
+      const rect = document.getElementById("chart-container").getBoundingClientRect();
+      const price = candleSeries.coordinateToPrice(e.clientY - rect.top);
+      if (price) {
+          // Update the temp dashed line
+          if (dragPriceLine) {
+              dragPriceLine.applyOptions({ price: price });
+          }
+      }
+  }
 }
 
 async function commitDrag(e) {
-  // Remove listener
   document.removeEventListener("mousemove", updateDrag);
+  document.body.style.cursor = "default";
+
+  if (draggingLine && draggingLine.ticket === 'LIMIT') {
+      draggingLine = null;
+      return;
+  }
 
   if (!draggingLine) return;
-  const rect = document
-    .getElementById("chart-container")
-    .getBoundingClientRect();
+
+  const rect = document.getElementById("chart-container").getBoundingClientRect();
   const finalPrice = candleSeries.coordinateToPrice(e.clientY - rect.top);
 
   if (!finalPrice) {
@@ -897,22 +1432,49 @@ async function commitDrag(e) {
     return;
   }
 
-  const payload = { ticket: draggingLine.ticket, user_id: currentUserId };
-  if (draggingLine.type === "TP") payload.tp = finalPrice;
-  if (draggingLine.type === "SL") payload.sl = finalPrice;
-
-  try {
-    const res = await fetch("http://127.0.0.1:5000/api/modify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    // ... handle response ...
-    fetchDashboardData();
-  } catch (err) {
-    showError("Network Error", err.message);
+  // Identify Targets
+  let targets = [];
+  const ticketId = draggingLine.ticket;
+  
+  // Check if it's an aggregate (starts with AGG or ACC, or has 'tickets' array)
+  if (priceLines[ticketId] && priceLines[ticketId].data && priceLines[ticketId].data.tickets) {
+      targets = priceLines[ticketId].data.tickets; // All underlying tickets
+  } else {
+      targets = [parseInt(ticketId)]; // Single ticket
   }
-  cancelDrag();
+
+  // Iterate and Modify All
+  // (In a production app, you'd want a bulk API endpoint, but loop works for now)
+  for (let t of targets) {
+      const payload = { 
+          ticket: t, 
+          user_id: currentUserId,
+          symbol: currentSymbol 
+      };
+      
+      if (draggingLine.type === "TP") payload.tp = finalPrice;
+      if (draggingLine.type === "SL") payload.sl = finalPrice;
+
+      try {
+        await fetch("http://127.0.0.1:5000/api/modify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        console.error("Modify error for ticket " + t, err);
+      }
+  }
+
+  // Cleanup
+  if (dragPriceLine) {
+      candleSeries.removePriceLine(dragPriceLine);
+      dragPriceLine = null;
+  }
+  draggingLine = null;
+  
+  // Refresh
+  await fetchDashboardData();
 }
 
 function cancelDrag() {
@@ -925,85 +1487,114 @@ function cancelDrag() {
   document.body.style.cursor = "default";
 }
 
+// frontend/dashboard.js
+
+// frontend/dashboard.js
+
 function updateChartPositions(positions) {
-  // FIX: Use startsWith to match 'BTCUSDT' (chart) with 'BTCUSDTp' (pos)
-  const currentPositions = positions.filter((p) =>
+  let targetPositions = positions;
+  
+  if (specificTradeView) {
+      targetPositions = positions.filter(p => p.account_login == specificTradeView || p.ticket == specificTradeView);
+  }
+
+  const currentPositions = targetPositions.filter((p) =>
     p.symbol.startsWith(currentSymbol),
   );
-  const activeTickets = new Set(currentPositions.map((p) => p.ticket));
 
   for (let t in priceLines) {
-    if (!activeTickets.has(t)) {
       const group = priceLines[t];
       if (group.main) candleSeries.removePriceLine(group.main);
       if (group.tp) candleSeries.removePriceLine(group.tp);
       if (group.sl) candleSeries.removePriceLine(group.sl);
-      delete priceLines[t];
-    }
+  }
+  priceLines = {};
+
+  if (currentPositions.length === 0) {
+      updateLeftLabels();
+      return;
   }
 
-  currentPositions.forEach((pos) => {
-    const mainColor = pos.type === "BUY" ? COL_BUY : COL_SELL;
-    const mainTitle = "";
+  let aggregates = {
+      'BUY': { vol: 0, priceProd: 0, profit: 0, tickets: [], tps: [], sls: [] },
+      'SELL': { vol: 0, priceProd: 0, profit: 0, tickets: [], tps: [], sls: [] }
+  };
 
-    if (!priceLines[pos.ticket]) {
-      const mainLine = candleSeries.createPriceLine({
-        price: pos.price_open,
-        color: mainColor,
-        lineWidth: 2,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: false,
-        title: mainTitle,
-      });
-      priceLines[pos.ticket] = {
-        main: mainLine,
-        tp: null,
-        sl: null,
-        data: pos,
-      };
-    } else {
-      const group = priceLines[pos.ticket];
-      group.main.applyOptions({ price: pos.price_open, title: mainTitle });
-      group.data = pos;
-    }
+  currentPositions.forEach(pos => {
+      const side = pos.type; 
+      aggregates[side].vol += pos.volume;
+      aggregates[side].priceProd += (pos.price_open * pos.volume);
+      aggregates[side].profit += pos.profit;
+      aggregates[side].tickets.push(pos.ticket);
+      aggregates[side].tps.push(pos.tp);
+      aggregates[side].sls.push(pos.sl);
+  });
 
-    const group = priceLines[pos.ticket];
+  ['BUY', 'SELL'].forEach(side => {
+      const agg = aggregates[side];
+      if (agg.vol > 0) {
+          const avgPrice = agg.priceProd / agg.vol; 
+          
+          // [FIX] Generate ID compatible with Backend Parser: SYMBOL_TYPE_LOGIN
+          // Global: XAUUSD_BUY
+          // Specific: XAUUSD_BUY_12345
+          const aggTicket = specificTradeView 
+              ? `${currentSymbol}_${side}_${specificTradeView}` 
+              : `${currentSymbol}_${side}`;
+          
+          const mainColor = side === "BUY" ? COL_BUY : COL_SELL;
+          
+          // Consistency Checks
+          const firstTP = agg.tps[0];
+          const isTPConsistent = agg.tps.every(val => Math.abs(val - firstTP) < 0.001);
+          const finalTP = (isTPConsistent && firstTP > 0) ? firstTP : 0;
 
-    if (pos.tp > 0) {
-      if (!group.tp) {
-        group.tp = candleSeries.createPriceLine({
-          price: pos.tp,
-          color: COL_TP,
-          lineWidth: 2,
-          lineStyle: LightweightCharts.LineStyle.Solid,
-          axisLabelVisible: false,
-          title: "",
-        });
-      } else {
-        group.tp.applyOptions({ price: pos.tp });
+          const firstSL = agg.sls[0];
+          const isSLConsistent = agg.sls.every(val => Math.abs(val - firstSL) < 0.001);
+          const finalSL = (isSLConsistent && firstSL > 0) ? firstSL : 0;
+
+          const mainLine = candleSeries.createPriceLine({
+            price: avgPrice,
+            color: mainColor,
+            lineWidth: 2,
+            lineStyle: LightweightCharts.LineStyle.Solid,
+            axisLabelVisible: false,
+            title: "", 
+          });
+
+          priceLines[aggTicket] = {
+            main: mainLine,
+            tp: null, 
+            sl: null,
+            data: {
+                ticket: aggTicket,
+                type: side,
+                price_open: avgPrice,
+                price: avgPrice,
+                price_current: latestCandle ? latestCandle.close : avgPrice,
+                symbol: currentSymbol,
+                volume: parseFloat(agg.vol.toFixed(2)),
+                profit: agg.profit,
+                tickets: agg.tickets,
+                tp: finalTP,
+                sl: finalSL,
+                is_aggregate: true 
+            }
+          };
+
+          if (finalTP > 0) {
+              priceLines[aggTicket].tp = candleSeries.createPriceLine({
+                  price: finalTP, color: COL_TP, lineWidth: 2,
+                  lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: false, title: "",
+              });
+          }
+          if (finalSL > 0) {
+              priceLines[aggTicket].sl = candleSeries.createPriceLine({
+                  price: finalSL, color: COL_SL, lineWidth: 2,
+                  lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: false, title: "",
+              });
+          }
       }
-    } else if (group.tp) {
-      candleSeries.removePriceLine(group.tp);
-      group.tp = null;
-    }
-
-    if (pos.sl > 0) {
-      if (!group.sl) {
-        group.sl = candleSeries.createPriceLine({
-          price: pos.sl,
-          color: COL_SL,
-          lineWidth: 2,
-          lineStyle: LightweightCharts.LineStyle.Solid,
-          axisLabelVisible: false,
-          title: "",
-        });
-      } else {
-        group.sl.applyOptions({ price: pos.sl });
-      }
-    } else if (group.sl) {
-      candleSeries.removePriceLine(group.sl);
-      group.sl = null;
-    }
   });
 
   updateLeftLabels();
@@ -1089,22 +1680,46 @@ function clearSpecificView() {
 }
 
 async function placeOrder(type) {
-  const qty = document.getElementById("trade-qty").value;
-  // LOADING: Select button and add loading class
+  const qtyInput = document.getElementById("trade-qty");
+  const qty = qtyInput ? parseFloat(qtyInput.value) : 1;
+  
+  // Loading State
   const btn = document.querySelector(type === "BUY" ? ".btn-buy" : ".btn-sell");
   if (btn) btn.classList.add("btn-loading");
+
+  // Construct Base Payload
+  let payload = {
+    user_id: currentUserId,
+    mobile: currentMobile,
+    symbol: currentSymbol,
+    type: type,
+    volume: qty,
+    order_type: 'MARKET' // Default
+  };
+
+  // --- LIMIT ORDER LOGIC ---
+  if (limitOrderState.active) {
+      // Safety Check: Prevent placing a SELL order while in BUY LIMIT mode
+      if (limitOrderState.type !== type) {
+          showError("Mode Mismatch", `You are currently in ${limitOrderState.type} Limit Mode. Please cancel it before placing a ${type} order.`);
+          if (btn) btn.classList.remove("btn-loading");
+          return;
+      }
+
+      payload.order_type = 'LIMIT';
+      payload.price = limitOrderState.entryPrice;
+      
+      // Only attach SL/TP if they are set (validity check)
+      if (limitOrderState.slPrice > 0) payload.sl = limitOrderState.slPrice;
+      if (limitOrderState.tpPrice > 0) payload.tp = limitOrderState.tpPrice;
+  }
+  // -------------------------
 
   try {
     const res = await fetch("http://127.0.0.1:5000/api/trade", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: currentUserId,
-        mobile: currentMobile,
-        symbol: currentSymbol,
-        type: type,
-        volume: parseFloat(qty),
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
 
@@ -1122,12 +1737,17 @@ async function placeOrder(type) {
       if (fails.length > 0) {
         showError("Trade Errors", fails.join("\n"));
       }
+      
+      // Success! If we were in limit mode, close it now.
+      if (limitOrderState.active) {
+          cancelLimitMode();
+      }
+      
       await fetchDashboardData();
     }
   } catch (e) {
     showError("Order Failed", e.message);
   } finally {
-    // LOADING: Remove loading class
     if (btn) btn.classList.remove("btn-loading");
   }
 }
@@ -1182,6 +1802,14 @@ function renderWatchlist() {
     div.innerHTML = `<div><div class="wl-symbol">${item.sym}</div><div class="wl-desc">${item.desc}</div></div>`;
     container.appendChild(div);
   });
+}
+
+function openHistoryModal() {
+  document.getElementById("history-modal").style.display = "flex";
+}
+
+function closeHistoryModal() {
+  document.getElementById("history-modal").style.display = "none";
 }
 
 function openAccountModal() {
@@ -1502,3 +2130,6 @@ window.closeTrade = closeTrade;
 window.toggleSidebar = toggleSidebar;
 window.toggleHeader = toggleHeader;
 window.updateDrag = updateDrag;
+window.toggleLimitMode = toggleLimitMode;
+window.openHistoryModal = openHistoryModal;
+window.closeHistoryModal = closeHistoryModal;
