@@ -3,7 +3,7 @@ const { ipcRenderer } = require("electron");
 // --- GLOBAL STATE ---
 let currentMobile = localStorage.getItem("userMobile");
 let currentUserId = localStorage.getItem("userId");
-let currentSymbol = "XAUUSD";
+var currentSymbol = "XAUUSD";
 let chart, candleSeries;
 let priceLines = {};
 let isErrorOpen = false;
@@ -12,7 +12,7 @@ let latestCandle = null;
 let draggingLine = null;
 let dragPriceLine = null;
 let activeHoverTicket = null;
-let allAccounts = [];
+var allAccounts = [];
 let expandedTickets = new Set();
 let specificTradeView = null;
 
@@ -54,6 +54,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     if (!currentMobile) window.location.href = "index.html";
 
+    fetchAccounts();
     renderWatchlist();
     initChart();
     setupMenuListeners();
@@ -188,6 +189,12 @@ async function fetchDashboardData() {
 
     const eqEl = document.getElementById("val-equity");
     if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
+
+    const fsBal = document.getElementById("fs-val-bal");
+    if (fsBal) fsBal.innerText = `$${data.balance.toFixed(2)}`;
+
+    const fsEq = document.getElementById("fs-val-equity");
+    if (fsEq) fsEq.innerText = `$${data.equity.toFixed(2)}`;
 
     const plEl = document.getElementById("val-pl");
     if (plEl) {
@@ -557,12 +564,12 @@ function renderPendingOrderLabels(aggregatedOrders) {
     const container = document.getElementById("trade-labels-left");
     if (!container) return;
     
-    // Remove old pending labels
+    // Cleanup old labels
     const existingLabels = container.querySelectorAll('.pending-order-label');
     existingLabels.forEach(el => el.remove());
 
     aggregatedOrders.forEach(o => {
-        // Hide if editing
+        // Hide this label if we are currently editing this specific order group
         if (limitOrderState.active && limitOrderState.isEdit) {
             if (limitOrderState.editTickets && o.tickets.some(t => limitOrderState.editTickets.includes(t))) return;
         }
@@ -589,82 +596,53 @@ function renderPendingOrderLabels(aggregatedOrders) {
         div.style.cursor = "pointer";
         div.style.pointerEvents = "auto";
         
-        // --- 1. Content: Total Quantity ---
-        // Since we are passing 'aggregatedOrders', o.volume IS the total quantity.
+        // [FIX] Use direct JS function property instead of setAttribute string
+        // This ensures 'startEditOrder' is found and 'o' is passed correctly
+        div.onclick = (e) => {
+            e.stopPropagation(); 
+            startEditOrder(o); 
+        };
+
         const qtyText = parseFloat(o.volume.toFixed(2));
         const textSpan = document.createElement("span");
         textSpan.innerText = `⏳ ${o.type} ${qtyText} @ ${o.price_open}`;
         div.appendChild(textSpan);
 
-        // --- 2. Action: Cancel Button ---
+        // --- CANCEL BUTTON ---
         const closeSpan = document.createElement("span");
         closeSpan.innerHTML = "×";
         closeSpan.style.fontWeight = "bold";
         closeSpan.style.fontSize = "16px";
         closeSpan.style.marginLeft = "4px";
         closeSpan.style.cursor = "pointer";
+        
+        // [FIX] Direct JS handler for Cancel as well
         closeSpan.onclick = async (e) => {
-            e.stopPropagation(); // Prevent Edit Mode trigger
+            e.stopPropagation(); // Critical: Stop bubbling so we don't trigger Edit Mode
+            
             if(confirm(`Cancel ${o.count} pending order(s)?`)) {
-                closeSpan.innerHTML = "..."; 
+                closeSpan.innerHTML = ""; 
+                closeSpan.className = "loader-spinner-small";
+                closeSpan.style.borderColor = "white transparent transparent transparent"; 
+                
                 await cancelPendingOrder(o.tickets);
             }
         };
+        
         div.appendChild(closeSpan);
-        
-        // --- 3. Action: Edit Mode (Click on Label) ---
-        div.onclick = (e) => {
-            startEditOrder(o);
-        };
-        
         container.appendChild(div);
     });
-}
-// 5. NEW: startEditOrder
-function startEditOrder(order) {
-    limitOrderState.active = true;
-    limitOrderState.isEdit = true;
-    limitOrderState.editTickets = order.tickets || [order.ticket];
-    limitOrderState.editTicket = order.ticket;
-    limitOrderState.type = order.type;
-    limitOrderState.entryPrice = order.price_open;
-    limitOrderState.tpPrice = order.tp;
-    limitOrderState.slPrice = order.sl;
-    
-    // Defaults
-    if (limitOrderState.tpPrice === 0) limitOrderState.tpPrice = order.type === 'BUY' ? order.price_open + 1 : order.price_open - 1;
-    if (limitOrderState.slPrice === 0) limitOrderState.slPrice = order.type === 'BUY' ? order.price_open - 1 : order.price_open + 1;
-
-    drawLimitLines(); 
-    updateLeftLabels();
-    
-    const btnClass = order.type === 'BUY' ? '.btn-buy' : '.btn-sell';
-    const btn = document.querySelector(btnClass);
-    if (btn) {
-        // [REQ] Rename Button
-        btn.innerText = "UPDATE LIMIT";
-        btn.classList.add("btn-limit-active");
-        btn.onclick = () => submitOrderModification(); 
-    }
-    
-    const oppBtn = document.querySelector(order.type === 'BUY' ? '.btn-sell' : '.btn-buy');
-    if (oppBtn) {
-        oppBtn.style.opacity = '0.3';
-        oppBtn.style.pointerEvents = 'none';
-    }
 }
 
 // 6. NEW: submitOrderModification
 async function submitOrderModification() {
-    // [FIX] Determine tickets to update
     const tickets = limitOrderState.editTickets || [limitOrderState.editTicket];
     
-    // Show Loading
-    const btn = document.querySelector(limitOrderState.type === 'BUY' ? '.btn-buy' : '.btn-sell');
-    if(btn) btn.classList.add('btn-loading');
+    // [FIX] Set Flag & UI
+    limitOrderState.isSubmitting = true;
+    updateLeftLabels();
     
     try {
-        // [FIX] Use Promise.all to update all tickets in parallel
         const promises = tickets.map(ticket => {
             const payload = {
                 user_id: currentUserId,
@@ -681,22 +659,22 @@ async function submitOrderModification() {
         });
 
         const results = await Promise.all(promises);
-        
-        // Check if any succeeded
         const anySuccess = results.some(r => r.success);
         
         if(anySuccess) {
+            // [FIX] Fetch first, then close
+            await fetchDashboardData(); 
             cancelLimitMode(); 
-            await fetchDashboardData(); // Force refresh
         } else {
-            // Show error from first failure
             const firstError = results.find(r => !r.success);
             showError("Modification Failed", firstError ? firstError.message : "Unknown error");
+            limitOrderState.isSubmitting = false;
+            updateLeftLabels();
         }
     } catch(e) {
         showError("Error", e.message);
-    } finally {
-        if(btn) btn.classList.remove('btn-loading');
+        limitOrderState.isSubmitting = false;
+        updateLeftLabels();
     }
 }
 
@@ -869,6 +847,25 @@ function initChart() {
     document.getElementById("hover-menu").style.display = "none";
   });
 
+  container.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      
+      // Get Price from Click
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const price = candleSeries.coordinateToPrice(y);
+      
+      if (price) {
+          showContextMenu(e.clientX, e.clientY, price);
+      }
+  });
+
+  // 2. Hide Menu on Click elsewhere
+  document.addEventListener('click', () => {
+      const menu = document.getElementById('custom-ctx-menu');
+      if (menu) menu.style.display = 'none';
+  });
+
   document.addEventListener("mouseup", (e) => {
     if (draggingLine) commitDrag(e);
   });
@@ -880,148 +877,80 @@ function initChart() {
   }).observe(container);
 }
 
+// Creates/Shows the Context Menu
+function showContextMenu(x, y, price) {
+    let menu = document.getElementById('custom-ctx-menu');
+    
+    // Create if doesn't exist
+    if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'custom-ctx-menu';
+        menu.className = 'custom-context-menu';
+        document.body.appendChild(menu);
+    }
+
+    // Update Content
+    menu.innerHTML = `
+        <div class="ctx-menu-item" onclick="initLimitFromContextMenu('BUY', ${price})">Buy Limit @ ${price.toFixed(2)}</div>
+        <div class="ctx-menu-item" onclick="initLimitFromContextMenu('SELL', ${price})">Sell Limit @ ${price.toFixed(2)}</div>
+    `;
+
+    // Position
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.style.display = 'block';
+}
+
+// Triggered by Menu Selection
+function initLimitFromContextMenu(type, price) {
+    // Hide Menu
+    const menu = document.getElementById('custom-ctx-menu');
+    if (menu) menu.style.display = 'none';
+
+    // Start Limit Mode with Custom Price
+    startLimitModeCustom(type, price);
+}
+
 // --- LEFT SIDE LABEL RENDERING ---
 function updateLeftLabels() {
   const container = document.getElementById("trade-labels-left");
   if (!container) return;
 
-  // We will track which labels should exist to cleanup old ones
   const activeLabelIds = new Set();
-
-  // Helper to process label rendering without destroying elements
-  const processLabel = (id, type, price, data) => {
-      activeLabelIds.add(id);
-      
-      let div = document.getElementById(id);
-      const y = candleSeries.priceToCoordinate(price);
-      
-      // If price is off-screen (y is null), hide
-      if (y === null) {
-          if (div) div.style.display = 'none';
-          return;
-      }
-
-      // --- FIX: Use Backend Profit if available for MAIN label ---
-      let pl;
-      if (type === "MAIN" && data.profit !== undefined) {
-          // Use the authoritative profit from backend
-          pl = Number(data.profit).toFixed(2);
-      } else {
-          // Calculate projected P/L for TP/SL lines (or fallback)
-          const target = type === "MAIN" ? data.price_current : price;
-          pl = calculatePL(data.symbol, data.type, data.volume, data.price_open, target);
-      }
-      
-      const sign = parseFloat(pl) >= 0 ? "+" : "";
-      const plColor = parseFloat(pl) >= 0 ? "#00b894" : "#ff5555"; 
-      const finalPlColor = type === "MAIN" ? plColor : "#ffffff";
-      const plHtml = `(<span style="color:${finalPlColor}; font-weight:700;">${sign}$${pl}</span>)`;
-      
-      let labelText = "";
-      if (type === "MAIN") {
-          let coreText = `${data.type} ${data.volume} @ ${data.price_open.toFixed(2)}`;
-          if (data.account_name) coreText = `${data.account_name} | ${coreText}`;
-          labelText = `${coreText} ${plHtml}`;
-      } else {
-          labelText = `${type} ${price.toFixed(2)} ${plHtml}`;
-      }
-
-      if (!div) {
-          // CREATE NEW LABEL
-          div = document.createElement("div");
-          div.id = id;
-          div.className = "trade-label-tag";
-          div.style.position = "absolute";
-          div.style.left = "0px";
-          div.style.fontSize = "14px"; 
-          div.style.padding = "6px 12px";
-          div.style.display = "flex";
-          div.style.alignItems = "center";
-          div.style.gap = "8px";
-          div.style.zIndex = "60"; 
-
-          // Color Styling
-          if (type === "MAIN") {
-             const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
-             div.style.backgroundColor = "#ffffff"; 
-             div.style.color = typeColor; 
-             div.style.fontWeight = "800";
-             div.style.border = `2px solid ${typeColor}`;
-             
-             // Hover Events
-             div.onmouseenter = () => {
-                if (menuHideTimer) clearTimeout(menuHideTimer);
-                showHoverMenuFixed(data.ticket, type, y, div);
-             };
-             div.onmouseleave = () => {
-                menuHideTimer = setTimeout(() => {
-                    document.getElementById("hover-menu").style.display = "none";
-                }, 150);
-             };
-          } else {
-             const bg = type === "TP" ? COL_TP : COL_SL;
-             div.style.backgroundColor = bg;
-             div.style.color = "#ffffff"; 
-             div.style.cursor = "ns-resize";
-             div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag(data.ticket, type, price); };
-          }
-          
-          // Inner Content Span
-          const contentSpan = document.createElement("span");
-          contentSpan.className = "label-content";
-          div.appendChild(contentSpan);
-
-          // Close Button
-          const closeSpan = document.createElement("span");
-          closeSpan.className = "label-close";
-          closeSpan.style.marginLeft = "8px";
-          closeSpan.style.cursor = "pointer";
-          closeSpan.style.fontWeight = "bold";
-          closeSpan.style.lineHeight = "1";
-          closeSpan.style.fontSize = "22px"; // Bigger Icon
-          closeSpan.innerHTML = "×";
-          
-          closeSpan.onclick = async (e) => {
-              e.stopPropagation(); e.preventDefault();
-              closeSpan.innerHTML = ""; 
-              closeSpan.className = "loader-spinner-small";
-              if (type === 'MAIN') await closeTrade(data.ticket);
-              else await removeLevel(data.ticket, type);
-          };
-          div.appendChild(closeSpan);
-
-          container.appendChild(div);
-      } else {
-          div.style.display = 'flex'; // Ensure visible
-      }
-
-      // UPDATE EXISTING LABEL
-      div.style.top = `${y}px`;
-      div.querySelector('.label-content').innerHTML = labelText;
-      
-      if (type === "MAIN") {
-           const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
-           div.querySelector('.label-close').style.color = typeColor;
-      } else {
-           div.querySelector('.label-close').style.color = "white";
-      }
-  };
 
   // 1. Process Active Positions
   if (candleSeries) {
       for (let t in priceLines) {
         const group = priceLines[t];
         const data = group.data;
-        if (group.main) processLabel(`lbl-${t}-MAIN`, "MAIN", data.price_open || data.price, data);
+        
+        // Render MAIN
+        if (group.main) {
+            renderSingleLabel(container, t, "MAIN", data.price_open || data.price, data);
+            activeLabelIds.add(`lbl-${t}-MAIN`);
+        }
+
+        // Render TP/SL (Only if not in Limit Mode)
         if (!limitOrderState.active) {
-            if (group.tp) processLabel(`lbl-${t}-TP`, "TP", data.tp, data);
-            if (group.sl) processLabel(`lbl-${t}-SL`, "SL", data.sl, data);
+            if (group.tp) {
+                renderSingleLabel(container, t, "TP", data.tp, data);
+                activeLabelIds.add(`lbl-${t}-TP`);
+            }
+            if (group.sl) {
+                renderSingleLabel(container, t, "SL", data.sl, data);
+                activeLabelIds.add(`lbl-${t}-SL`);
+            }
         }
       }
   }
-  
 
-  // 2. Process Limit Orders
+  // 2. Process Pending Orders
+  if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
+      const aggOrders = aggregateOrders(window.SYSTEM_STATE.orders);
+      renderPendingOrderLabels(aggOrders);
+  }
+
+  // 3. Process Limit Order Mode Labels
   if (limitOrderState.active) {
       try {
         renderLimitLabels(container);
@@ -1029,24 +958,16 @@ function updateLeftLabels() {
         console.error("Error rendering limit labels:", e);
       }
   } else {
-      // Clean up Limit labels if they exist but mode is inactive
+      // Clean up Limit labels
       ['limit-lbl-ENTRY', 'limit-lbl-TP', 'limit-lbl-SL'].forEach(id => {
           const el = document.getElementById(id);
           if(el) el.remove();
       });
   }
 
-  // 3. Process Pending Orders
-  if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
-      // FIX: Aggregated orders before rendering labels
-      const aggOrders = aggregateOrders(window.SYSTEM_STATE.orders);
-      renderPendingOrderLabels(aggOrders);
-  }
-
-  // 4. Cleanup Old Labels
+  // 4. Cleanup Old Position Labels
   Array.from(container.children).forEach(child => {
-      // Only remove if it's one of our managed position labels (starts with lbl-)
-      // Pending orders and Limit labels have different classes/logic, so we leave them be (or manage them separately)
+      // Remove only if it's a position label (starts with lbl-) and not active
       if (child.id && child.id.startsWith('lbl-') && !activeLabelIds.has(child.id)) {
           child.remove();
       }
@@ -1055,94 +976,202 @@ function updateLeftLabels() {
 
 function renderSingleLabel(container, ticket, type, price, data) {
   if (!price || price <= 0) return;
+  
+  const id = `lbl-${ticket}-${type}`;
+  let div = document.getElementById(id);
   const y = candleSeries.priceToCoordinate(price);
-  if (y === null) return;
 
-  const div = document.createElement("div");
-  div.className = "trade-label-tag";
-  div.style.top = `${y}px`;
-  div.style.fontSize = "14px"; 
-  div.style.padding = "6px 12px";
-  div.style.display = "flex";
-  div.style.alignItems = "center";
-  div.style.gap = "8px";
+  if (y === null) {
+      if (div) div.style.display = 'none';
+      return;
+  }
 
-  // --- FIX START: Use Backend Profit if available for MAIN label ---
+  // --- CONTENT GENERATION ---
   let pl;
   if (type === "MAIN" && data.profit !== undefined) {
-      // Use the authoritative profit from backend/data object
       pl = Number(data.profit).toFixed(2);
   } else {
-      // Calculate projected P/L for TP/SL lines
       const target = type === "MAIN" ? data.price_current : price;
       pl = calculatePL(data.symbol, data.type, data.volume, data.price_open, target);
   }
-  // --- FIX END ---
 
   const sign = parseFloat(pl) >= 0 ? "+" : "";
   const plColor = parseFloat(pl) >= 0 ? "#00b894" : "#ff5555"; 
   const finalPlColor = type === "MAIN" ? plColor : "#ffffff";
   const plHtml = `(<span style="color:${finalPlColor}; font-weight:700;">${sign}$${pl}</span>)`;
+  const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
 
-  const contentSpan = document.createElement("span");
+  // Define Content HTML
+  let contentHtml = "";
   
-  // Close Button
-  const closeSpan = document.createElement("span");
-  closeSpan.className = "label-close";
-  closeSpan.style.marginLeft = "8px";
-  closeSpan.style.cursor = "pointer";
-  closeSpan.style.fontWeight = "bold";
-  closeSpan.style.fontSize = "22px"; // Kept your bigger icon size
-  closeSpan.style.lineHeight = "1";
-  closeSpan.innerHTML = "×";
-  
-  closeSpan.onclick = async (e) => {
-      e.stopPropagation(); e.preventDefault();
-      closeSpan.innerHTML = ""; 
-      closeSpan.className = "loader-spinner-small";
-      if (type === 'MAIN') await closeTrade(ticket);
-      else await removeLevel(ticket, type);
-  };
-
   if (type === "MAIN") {
-    const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
-    div.style.backgroundColor = "#ffffff"; 
-    div.style.color = typeColor; 
-    div.style.fontWeight = "800";
-    div.style.border = `2px solid ${typeColor}`;
-    div.style.zIndex = "60"; 
-    closeSpan.style.color = typeColor;
+      let coreText = `${data.type} ${data.volume} @ ${data.price_open.toFixed(2)}`;
+      if (data.account_name) coreText = `${data.account_name} | ${coreText}`;
+      contentHtml = `<span class="label-content">${coreText} ${plHtml}</span>`;
+  } else {
+      // TP/SL: Label + Input + P/L
+      // [NEW] Added Input Field
+      const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" 
+          value="${price.toFixed(2)}" 
+          onmousedown="event.stopPropagation()"
+          onkeydown="if(event.key === 'Enter') handlePositionInput('${ticket}', '${type}', this.value)"
+          onblur="handlePositionInput('${ticket}', '${type}', this.value)" 
+      />`;
+      
+      contentHtml = `<span class="label-content" style="display:flex; align-items:center;">${type} ${inputHtml} ${plHtml}</span>`;
+  }
 
-    // Show Account Name + Detail
-    let labelText = `${data.type} ${data.volume} @ ${data.price_open.toFixed(2)}`;
-    if (data.account_name) labelText = `${data.account_name} | ${labelText}`;
-    
-    contentSpan.innerHTML = `${labelText} ${plHtml}`;
-    
-    div.onmouseenter = () => {
-      if (menuHideTimer) clearTimeout(menuHideTimer);
-      showHoverMenuFixed(ticket, type, y, div);
-    };
-    div.onmouseleave = () => {
-      menuHideTimer = setTimeout(() => {
-        document.getElementById("hover-menu").style.display = "none";
-      }, 150);
-    };
-  } 
-  else if (type === "TP" || type === "SL") {
-    const bg = type === "TP" ? COL_TP : COL_SL;
-    div.style.backgroundColor = bg;
-    div.style.color = "#ffffff"; 
-    closeSpan.style.color = "white";
-    
-    contentSpan.innerHTML = `${type} ${price.toFixed(2)} ${plHtml}`;
-    div.style.cursor = "ns-resize";
-    div.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); startDrag(ticket, type, price); };
-  } 
+  // --- CREATE OR UPDATE DOM ---
+  if (!div) {
+      div = document.createElement("div");
+      div.id = id;
+      div.className = "trade-label-tag";
+      div.style.position = "absolute";
+      div.style.left = "0px";
+      div.style.fontSize = "14px"; 
+      div.style.padding = "6px 12px";
+      div.style.display = "flex";
+      div.style.alignItems = "center";
+      div.style.gap = "8px";
+      div.style.zIndex = "60"; 
 
-  div.appendChild(contentSpan);
-  div.appendChild(closeSpan);
-  container.appendChild(div);
+      // Insert Content Placeholder
+      const contentSpan = document.createElement("span");
+      contentSpan.className = "label-wrapper"; // Wrapper for innerHTML
+      div.appendChild(contentSpan);
+
+      // Close Button
+      const closeSpan = document.createElement("span");
+      closeSpan.className = "label-close";
+      closeSpan.style.marginLeft = "8px";
+      closeSpan.style.cursor = "pointer";
+      closeSpan.style.fontWeight = "bold";
+      closeSpan.style.fontSize = "22px";
+      closeSpan.style.lineHeight = "1";
+      closeSpan.innerHTML = "×";
+      
+      closeSpan.onmousedown = (e) => { e.stopPropagation(); };
+
+      closeSpan.onclick = async (e) => {
+          e.stopPropagation(); e.preventDefault();
+          closeSpan.innerHTML = ""; 
+          closeSpan.className = "loader-spinner-small";
+          
+          if (type === 'MAIN') {
+              closeSpan.style.border = "2px solid rgba(0,0,0,0.1)"; 
+              closeSpan.style.borderTop = `2px solid ${typeColor}`; 
+          } else {
+              closeSpan.style.border = "2px solid rgba(255,255,255,0.3)";
+              closeSpan.style.borderTop = "2px solid white";
+          }
+
+          try {
+              if (type === 'MAIN') await closeTrade(ticket);
+              else await removeLevel(ticket, type);
+          } catch (err) {
+              closeSpan.className = "label-close"; 
+              closeSpan.style.border = "none";     
+              closeSpan.innerHTML = "×";
+          }
+      };
+      div.appendChild(closeSpan);
+      
+      // Event Listeners
+      if (type === "MAIN") {
+         div.onmouseenter = () => {
+            if (menuHideTimer) clearTimeout(menuHideTimer);
+            showHoverMenuFixed(ticket, type, y, div);
+         };
+         div.onmouseleave = () => {
+            menuHideTimer = setTimeout(() => {
+                document.getElementById("hover-menu").style.display = "none";
+            }, 150);
+         };
+      } else {
+         div.style.cursor = "ns-resize";
+         div.onmousedown = (e) => { 
+             // Allow dragging unless clicking the input
+             if (e.target.tagName === 'INPUT') return;
+             e.preventDefault(); e.stopPropagation(); 
+             startDrag(ticket, type, price); 
+         };
+      }
+
+      container.appendChild(div);
+  } else {
+      div.style.display = 'flex';
+  }
+
+  // --- UPDATE CONTENT (Anti-Flicker) ---
+  const wrapper = div.querySelector('.label-wrapper');
+  
+  // Check if user is typing in this specific label
+  const activeInput = document.activeElement;
+  const isInputFocused = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
+
+  if (!isInputFocused) {
+      wrapper.innerHTML = contentHtml;
+  }
+
+  // --- STYLING ---
+  div.style.top = `${y}px`;
+  
+  if (type === "MAIN") {
+      div.style.backgroundColor = "#ffffff"; 
+      div.style.color = typeColor; 
+      div.style.fontWeight = "800";
+      div.style.border = `2px solid ${typeColor}`;
+      div.querySelector('.label-close').style.color = typeColor;
+  } else {
+      const bg = type === "TP" ? COL_TP : COL_SL;
+      div.style.backgroundColor = bg;
+      div.style.color = "#ffffff"; 
+      div.style.fontWeight = "400"; 
+      div.style.border = "none";
+      div.querySelector('.label-close').style.color = "white";
+  }
+}
+
+async function handlePositionInput(ticketId, type, priceStr) {
+    const newPrice = parseFloat(priceStr);
+    if (isNaN(newPrice) || newPrice <= 0) return;
+
+    // Identify Targets (Handle Aggregates)
+    let targets = [];
+    if (priceLines[ticketId] && priceLines[ticketId].data && priceLines[ticketId].data.tickets) {
+        targets = priceLines[ticketId].data.tickets; // All tickets in group
+    } else {
+        targets = [ticketId]; // Single ticket
+    }
+
+    // Call API for each target
+    const promises = targets.map(t => {
+        const payload = { 
+            ticket: t, 
+            user_id: currentUserId, 
+            symbol: currentSymbol 
+        };
+        
+        if (type === 'TP') payload.tp = newPrice;
+        if (type === 'SL') payload.sl = newPrice;
+        
+        return fetch("http://127.0.0.1:5000/api/modify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+    });
+
+    try {
+        await Promise.all(promises);
+        await fetchDashboardData(); // Refresh chart
+        
+        // Remove focus to show update
+        if(document.activeElement) document.activeElement.blur();
+        
+    } catch (err) {
+        showError("Modification Failed", err.message);
+    }
 }
 
 // 2. UPDATE showHoverMenuFixed (Allow Menu for Aggregates)
@@ -1278,88 +1307,56 @@ function updateLegend(data) {
     `;
 }
 
-function toggleLimitMode(type) {
-  // Toggle off if clicking the same button
-  if (limitOrderState.active && limitOrderState.type === type) {
-    cancelLimitMode();
-    return;
-  }
-  
-  // --- NEW: Block Opposing Pending Orders ---
-  if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
-      const opposingType = type === 'BUY' ? 'SELL' : 'BUY';
-      
-      // Check if any pending order exists for the Current Symbol with Opposing Type
-      const hasOpposing = window.SYSTEM_STATE.orders.some(o => 
-          o.symbol.startsWith(currentSymbol) && o.type === opposingType
-      );
+function startLimitModeCustom(type, price) {
+    // 1. Safety Check (Opposing Orders)
+    if (window.SYSTEM_STATE && window.SYSTEM_STATE.orders) {
+        const opposingType = type === 'BUY' ? 'SELL' : 'BUY';
+        const hasOpposing = window.SYSTEM_STATE.orders.some(o => 
+            o.symbol.startsWith(currentSymbol) && o.type === opposingType
+        );
+        if (hasOpposing) {
+            showError("Action Blocked", `Cannot place ${type} Limit. You have pending ${opposingType} orders.`);
+            return;
+        }
+    }
 
-      if (hasOpposing) {
-          showError("Action Blocked", `Cannot place ${type} Limit. You have pending ${opposingType} orders.`);
-          return; // Stop execution
-      }
-  }
-  // ------------------------------------------
+    limitOrderState.active = true;
+    limitOrderState.type = type;
+    limitOrderState.entryPrice = price;
+    limitOrderState.isSubmitting = false;
 
-  const cmp = latestCandle ? latestCandle.close : 0;
-  if (!cmp || cmp <= 0) return;
+    // 2. Calculate 0.3% Margin (Reverted to simple logic)
+    const margin = price * 0.002; 
+    
+    if (type === 'BUY') {
+        limitOrderState.tpPrice = price + margin;
+        limitOrderState.slPrice = price - margin;
+    } else {
+        limitOrderState.tpPrice = price - margin;
+        limitOrderState.slPrice = price + margin;
+    }
 
-  // Reset if switching direction (e.g. Buy Limit -> Sell Limit)
-  if (limitOrderState.active) {
-    cancelLimitMode();
-  }
-
-  limitOrderState.active = true;
-  limitOrderState.type = type;
-
-  // Initialize Prices
-  limitOrderState.entryPrice = cmp;
-  
-  if (type === 'BUY') {
-      limitOrderState.tpPrice = cmp + 1.0; 
-      limitOrderState.slPrice = cmp - 1.0; 
-  } else {
-      limitOrderState.tpPrice = cmp - 1.0; 
-      limitOrderState.slPrice = cmp + 1.0; 
-  }
-
-  drawLimitLines();
-  setExistingLinesStyle(LightweightCharts.LineStyle.Dashed);
-  updateLeftLabels(); 
-  
-  // Highlight Button
-  document.querySelectorAll('.btn-buy-limit, .btn-sell-limit').forEach(b => b.classList.remove('active'));
-  const btnClass = type === 'BUY' ? '.btn-buy-limit' : '.btn-sell-limit';
-  const btn = document.querySelector(btnClass);
-  if(btn) btn.classList.add('active');
-
-  updateMainButtonText(type);
+    drawLimitLines();
+    setExistingLinesStyle(LightweightCharts.LineStyle.Dashed);
+    updateLeftLabels();
 }
 
 function cancelLimitMode() {
   limitOrderState.active = false;
   limitOrderState.isEdit = false;
+  limitOrderState.isSubmitting = false; // [Reset]
   limitOrderState.editTicket = null;
+  limitOrderState.editTickets = null;
   
   if (limitOrderState.lines.entry) candleSeries.removePriceLine(limitOrderState.lines.entry);
   if (limitOrderState.lines.tp) candleSeries.removePriceLine(limitOrderState.lines.tp);
   if (limitOrderState.lines.sl) candleSeries.removePriceLine(limitOrderState.lines.sl);
   
   limitOrderState.lines = { entry: null, tp: null, sl: null };
-  
   setExistingLinesStyle(LightweightCharts.LineStyle.Solid);
   
   document.querySelectorAll('.btn-buy-limit, .btn-sell-limit').forEach(b => b.classList.remove('active'));
-  
   updateLeftLabels();
-
-  const buyBtn = document.querySelector('.btn-buy');
-    const sellBtn = document.querySelector('.btn-sell');
-    if(buyBtn) { buyBtn.onclick = () => placeOrder('BUY'); }
-    if(sellBtn) { sellBtn.onclick = () => placeOrder('SELL'); }
-  
-  // --- NEW: Reset Main Button Text ---
-  resetMainButtonText();
 }
 
 function drawLimitLines() {
@@ -1406,9 +1403,97 @@ function setExistingLinesStyle(style) {
     }
 }
 
+function startEditOrder(order) {
+    // 1. Set State
+    limitOrderState.active = true;
+    limitOrderState.isEdit = true;
+    limitOrderState.isSubmitting = false; // Reset loading state
+    
+    // 2. Load Order Data
+    // Support both single ticket and aggregated tickets
+    limitOrderState.editTickets = order.tickets || [order.ticket];
+    limitOrderState.editTicket = order.ticket;
+    
+    limitOrderState.type = order.type;
+    limitOrderState.entryPrice = order.price_open;
+    limitOrderState.tpPrice = order.tp;
+    limitOrderState.slPrice = order.sl;
+    
+    // 3. Defaults if TP/SL are 0 (Set to ~1% away just for visualization)
+    if (!limitOrderState.tpPrice || limitOrderState.tpPrice === 0) {
+        limitOrderState.tpPrice = order.type === 'BUY' ? order.price_open * 1.01 : order.price_open * 0.99;
+    }
+    if (!limitOrderState.slPrice || limitOrderState.slPrice === 0) {
+        limitOrderState.slPrice = order.type === 'BUY' ? order.price_open * 0.99 : order.price_open * 1.01;
+    }
+
+    // 4. Draw Lines & Update UI
+    drawLimitLines(); 
+    setExistingLinesStyle(LightweightCharts.LineStyle.Dashed);
+    updateLeftLabels();
+}
+
+function handleLimitInput(type, valueStr) {
+    // [FIX] Blur immediately to allow the UI to refresh cleanly
+    if (document.activeElement) {
+        document.activeElement.blur();
+    }
+
+    const newPrice = parseFloat(valueStr);
+    if (isNaN(newPrice) || newPrice <= 0) return;
+
+    // 1. Update State
+    if (type === 'ENTRY') {
+        limitOrderState.entryPrice = newPrice;
+    } 
+    else if (type === 'TP') {
+        limitOrderState.tpPrice = newPrice;
+    } 
+    else if (type === 'SL') {
+        limitOrderState.slPrice = newPrice;
+    }
+
+    // 2. Update Lines on Chart (Move lines instantly)
+    if (limitOrderState.lines.entry) limitOrderState.lines.entry.applyOptions({ price: limitOrderState.entryPrice });
+    if (limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: limitOrderState.tpPrice });
+    if (limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: limitOrderState.slPrice });
+
+    // 3. Re-render Labels (Update P/L Text)
+    // Because we blurred above, renderLimitLabels will now update the HTML
+    updateLeftLabels();
+}
+
 function renderLimitLabels(container) {
+    let totalVol = 0;
+
+    // 1. Get Total Volume from Active Accounts (Config)
+    const accounts = window.allAccounts || [];
+    const sym = window.currentSymbol || currentSymbol;
+
+    if (accounts.length > 0 && sym) {
+        const rawSym = sym.toUpperCase();
+        
+        accounts.forEach(acc => {
+            if (acc.IS_ACTIVE && acc.SYMBOL_CONFIG) {
+                const configKey = Object.keys(acc.SYMBOL_CONFIG).find(k => {
+                    const confSym = k.toUpperCase();
+                    return rawSym === confSym || rawSym.startsWith(confSym);
+                });
+
+                if (configKey) {
+                    const vol = parseFloat(acc.SYMBOL_CONFIG[configKey].VOLUME);
+                    if (!isNaN(vol)) totalVol += vol;
+                }
+            }
+        });
+    }
+
+    // Fallback: If no account config volume found, default to 1 (so we don't multiply by 0)
+    if (totalVol === 0) totalVol = 1;
+
+    // 2. [UPDATED] Get Multiplier from the Input Box (between Buy/Sell buttons)
     const qtyInput = document.getElementById('trade-qty');
-    const qty = qtyInput ? (parseFloat(qtyInput.value) || 0) : 0;
+    const inputMultiplier = qtyInput ? (parseFloat(qtyInput.value) || 1) : 1;
 
     const definitions = [
         { type: 'ENTRY', price: limitOrderState.entryPrice, color: limitOrderState.type === 'BUY' ? COL_BUY : COL_SELL },
@@ -1421,27 +1506,54 @@ function renderLimitLabels(container) {
         let div = document.getElementById(id);
         const y = candleSeries.priceToCoordinate(def.price);
 
-        // If price is off-screen, remove label if it exists and return
         if (y === null) {
             if(div) div.remove();
             return;
         }
 
-        // Calculate P/L for Text
-        let text = "";
+        // --- CONTENT GENERATION ---
+        const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" 
+            value="${def.price.toFixed(2)}" 
+            onmousedown="event.stopPropagation()"
+            onkeyup="if(event.key === 'Enter') handleLimitInput('${def.type}', this.value)"
+            onblur="handleLimitInput('${def.type}', this.value)" 
+        />`;
+
+        let contentHtml = "";
+
         if (def.type === 'ENTRY') {
-             text = `Entry ${def.price.toFixed(2)} <span style="margin-left:8px; cursor:pointer;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>`;
-        } else {
-             let pl = 0;
-             if (limitOrderState.type === 'BUY') {
-                pl = (def.price - limitOrderState.entryPrice) * qty;
-             } else {
-                pl = (limitOrderState.entryPrice - def.price) * qty;
+             const isEdit = limitOrderState.isEdit;
+             const isSubmitting = limitOrderState.isSubmitting;
+             
+             let btnText = isEdit ? "UPDATE" : "PLACE";
+             let btnAction = isEdit ? "submitOrderModification()" : "confirmLimitOrderFromLabel()";
+             let btnStyle = "";
+
+             if (isSubmitting) {
+                 btnText = "...";
+                 btnAction = "";
+                 btnStyle = "opacity:0.7; pointer-events:none;";
              }
-             text = `${def.type} ${def.price.toFixed(2)} ($${pl.toFixed(2)})`;
+
+             contentHtml = `
+                <span style="margin-right:2px;">Entry</span>
+                ${inputHtml}
+                <button class="btn-label-place no-drag" style="${btnStyle}" onmousedown="event.stopPropagation(); ${btnAction}">${btnText}</button>
+                <span class="no-drag" style="margin-left:8px; cursor:pointer; font-size:16px;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>
+             `;
+        } else {
+             // --- P/L CALCULATION ---
+             // Formula: Distance * Total Config Volume * Input Box Multiplier
+             const dist = Math.abs(def.price - limitOrderState.entryPrice);
+             const plVal = dist * totalVol * inputMultiplier;
+
+             const sign = plVal >= 0 ? "+" : "-";
+             const absPl = Math.abs(plVal).toFixed(2);
+             
+             contentHtml = `${def.type} ${inputHtml} (${sign}$${absPl})`;
         }
 
-        // Create if doesn't exist
+        // --- DOM UPDATES ---
         if (!div) {
             div = document.createElement("div");
             div.id = id;
@@ -1454,48 +1566,82 @@ function renderLimitLabels(container) {
             div.style.alignItems = "center";
             div.style.fontWeight = "700";
             div.style.cursor = "ns-resize";
-            div.style.zIndex = "61"; // Ensure it's above other labels
+            div.style.zIndex = "61";
             div.style.pointerEvents = "auto"; 
             
             div.onmousedown = (e) => { 
-                e.preventDefault(); 
-                e.stopPropagation(); 
+                if (e.target.classList.contains('no-drag') || e.target.tagName === 'INPUT') return;
+                e.preventDefault(); e.stopPropagation(); 
                 startDrag('LIMIT', def.type, def.price); 
             };
-            
             container.appendChild(div);
+        } else {
+            const activeInput = document.activeElement;
+            const isInputFocused = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
+            if (!isInputFocused) {
+                 div.innerHTML = contentHtml;
+            }
         }
 
-        // Update Position & Content
         div.style.top = `${y}px`;
         div.style.backgroundColor = def.color;
         div.style.color = "white";
-        div.innerHTML = text;
+        if(!div.innerHTML) div.innerHTML = contentHtml; 
     });
 }
 
-function createLimitLabelDiv(topY, type) {
-    const div = document.createElement("div");
-    div.className = "trade-label-tag";
+async function confirmLimitOrderFromLabel() {
+    const qtyInput = document.getElementById("trade-qty");
+    const qty = qtyInput ? parseFloat(qtyInput.value) : 1;
     
-    // explicit positioning
-    div.style.position = "absolute"; 
-    div.style.left = "0px"; 
-    div.style.top = `${topY}px`;
-    
-    // style
-    div.style.fontSize = "14px";
-    div.style.padding = "6px 12px";
-    div.style.display = "flex";
-    div.style.alignItems = "center";
-    div.style.fontWeight = "700";
-    div.style.cursor = "ns-resize";
-    div.style.zIndex = "60";
-    
-    // enable mouse interaction (critical!)
-    div.style.pointerEvents = "auto"; 
-    
-    return div;
+    // [FIX] Set Flag & update UI immediately
+    limitOrderState.isSubmitting = true;
+    updateLeftLabels(); // Forces button to show "..."
+
+    const payload = {
+        user_id: currentUserId,
+        mobile: currentMobile,
+        symbol: currentSymbol,
+        type: limitOrderState.type, 
+        volume: qty,
+        order_type: 'LIMIT',
+        price: limitOrderState.entryPrice,
+        sl: limitOrderState.slPrice,
+        tp: limitOrderState.tpPrice
+    };
+
+    try {
+        const res = await fetch("http://127.0.0.1:5000/api/trade", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (data.blocked) {
+            showError("Trade Blocked", "Opposing position exists.");
+            limitOrderState.isSubmitting = false;
+            updateLeftLabels();
+        } else if (data.error) {
+            showError("Order Failed", data.error);
+            limitOrderState.isSubmitting = false;
+            updateLeftLabels();
+        } else {
+            const fails = (data.details || []).filter(d => !d.includes("Done") && !d.includes("Success"));
+            if (fails.length > 0) {
+                showError("Trade Errors", fails.join("\n"));
+            }
+            // [FIX] Fetch Data FIRST (Button stays "...")
+            await fetchDashboardData();
+            
+            // THEN remove the lines (New order lines will have appeared by now)
+            cancelLimitMode();
+        }
+    } catch (e) {
+        showError("Order Failed", e.message);
+        limitOrderState.isSubmitting = false;
+        updateLeftLabels();
+    }
 }
 
 // --- UPDATED PL CALCULATION ---
@@ -1556,92 +1702,95 @@ function startDrag(ticket, type, currentPrice) {
 }
 
 function updateDrag(e) {
+  const container = document.getElementById("chart-container");
+  const rect = container.getBoundingClientRect();
+  let price = candleSeries.coordinateToPrice(e.clientY - rect.top);
+  
+  if (!price) return;
+
+  // 1. LIMIT ORDER DRAG LOGIC
   if (draggingLine && draggingLine.ticket === 'LIMIT') {
-      const rect = document.getElementById("chart-container").getBoundingClientRect();
-      const price = candleSeries.coordinateToPrice(e.clientY - rect.top);
-      if (!price) return;
+      
+      // --- CONSTRAINTS (Entry Price Basis) ---
+      const entry = limitOrderState.entryPrice;
 
-      if (draggingLine.type === 'TP') {
-          // TP Restrictions
-          if (limitOrderState.type === 'BUY') {
-              if (price < limitOrderState.entryPrice) price = limitOrderState.entryPrice;
-          } else { // SELL
-              if (price > limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+      if (limitOrderState.type === 'BUY') {
+          // BUY LIMIT RULES
+          if (draggingLine.type === 'TP') {
+              // TP cannot go below Entry
+              if (price < entry) price = entry; 
+          } 
+          else if (draggingLine.type === 'SL') {
+              // SL cannot go above Entry
+              if (price > entry) price = entry; 
           }
-      }else if (draggingLine.type === 'SL') {
-          // SL Restrictions
-          if (limitOrderState.type === 'BUY') {
-              if (price > limitOrderState.entryPrice) price = limitOrderState.entryPrice;
-          } else { // SELL
-              if (price < limitOrderState.entryPrice) price = limitOrderState.entryPrice;
+      } 
+      else {
+          // SELL LIMIT RULES
+          if (draggingLine.type === 'TP') {
+              // TP cannot go above Entry
+              if (price > entry) price = entry; 
+          } 
+          else if (draggingLine.type === 'SL') {
+              // SL cannot go below Entry
+              if (price < entry) price = entry; 
           }
-      }else if (draggingLine.type === 'ENTRY') {
-           // Entry Logic: Shift TP and SL along with Entry to maintain distance
-           const delta = price - limitOrderState.entryPrice;
-           
-           limitOrderState.tpPrice += delta;
-           limitOrderState.slPrice += delta;
-           limitOrderState.entryPrice = price; // Update Entry
-
-           // Update TP/SL Lines immediately for visual feedback
-           if (limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: limitOrderState.tpPrice });
-           if (limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: limitOrderState.slPrice });
       }
 
-      // Update State
-      if (draggingLine.type === 'ENTRY') limitOrderState.entryPrice = price;
-      if (draggingLine.type === 'TP') limitOrderState.tpPrice = price;
-      if (draggingLine.type === 'SL') limitOrderState.slPrice = price;
+      // --- APPLY UPDATES ---
+      if (draggingLine.type === 'ENTRY') {
+           // Move Entry: Shift TP/SL by same amount
+           const delta = price - limitOrderState.entryPrice;
+           limitOrderState.entryPrice = price; 
+           limitOrderState.tpPrice += delta;
+           limitOrderState.slPrice += delta;
 
-      // Update Line Position
-      if (draggingLine.type === 'ENTRY' && limitOrderState.lines.entry) limitOrderState.lines.entry.applyOptions({ price: price });
-      if (draggingLine.type === 'TP' && limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: price });
-      if (draggingLine.type === 'SL' && limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: price });
+           // Update all lines
+           if (limitOrderState.lines.entry) limitOrderState.lines.entry.applyOptions({ price: limitOrderState.entryPrice });
+           if (limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: limitOrderState.tpPrice });
+           if (limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: limitOrderState.slPrice });
+      } 
+      else {
+           // Move TP or SL (Constrained)
+           if (draggingLine.type === 'TP') {
+               limitOrderState.tpPrice = price;
+               if (limitOrderState.lines.tp) limitOrderState.lines.tp.applyOptions({ price: price });
+           } 
+           else if (draggingLine.type === 'SL') {
+               limitOrderState.slPrice = price;
+               if (limitOrderState.lines.sl) limitOrderState.lines.sl.applyOptions({ price: price });
+           }
+      }
       
-      // Update Labels (Re-render)
       updateLeftLabels();
       return;
   }
 
+  // 2. POSITION DRAG LOGIC (Existing)
   if (!draggingLine || !dragPriceLine) return;
-  const rect = document
-    .getElementById("chart-container")
-    .getBoundingClientRect();
-  let price = candleSeries.coordinateToPrice(e.clientY - rect.top);
-  if (!price) return;
 
   const entry = draggingLine.startPrice;
   const isBuy = draggingLine.direction === "BUY";
   
-  // [REQ 1] Get Current Market Price (CMP) from the latest candle
-  // Fallback to entry if data isn't loaded yet
-  const currentCmp = latestCandle ? latestCandle.close : entry;
+  // Get Robust Current Price
+  let currentCmp = entry;
+  if (priceLines[draggingLine.ticket] && priceLines[draggingLine.ticket].data && priceLines[draggingLine.ticket].data.price_current) {
+      currentCmp = priceLines[draggingLine.ticket].data.price_current;
+  } else if (latestCandle) {
+      currentCmp = latestCandle.close;
+  }
 
-  // Validate constraints
+  // --- CONSTRAINTS (Current Price Basis) ---
   if (isBuy) {
-    // TP must still be above entry (Profit target)
     if (draggingLine.type === "TP" && price < entry) price = entry;
-    
-    // SL Logic:
-    // Old: if (price > entry) price = entry;
-    // New: Allow dragging above entry (Trailing), but must stay BELOW Current Price
-    if (draggingLine.type === "SL") {
-        if (price >= currentCmp) price = currentCmp; 
-    }
-
+    if (draggingLine.type === "SL" && price >= currentCmp) price = currentCmp;
   } else {
-    // TP must still be below entry (Profit target)
     if (draggingLine.type === "TP" && price > entry) price = entry;
-    
-    // SL Logic:
-    // Old: if (price < entry) price = entry;
-    // New: Allow dragging below entry (Trailing), but must stay ABOVE Current Price
-    if (draggingLine.type === "SL") {
-        if (price <= currentCmp) price = currentCmp;
-    }
+    if (draggingLine.type === "SL" && price <= currentCmp) price = currentCmp;
   }
 
   dragPriceLine.applyOptions({ price: price });
+  
   const pl = calculatePL(
     draggingLine.symbol,
     draggingLine.direction,
@@ -1649,21 +1798,10 @@ function updateDrag(e) {
     entry,
     price,
   );
+  
   dragPriceLine.applyOptions({
     title: `${draggingLine.type}: ${pl >= 0 ? "+" : ""}$${pl}`,
   });
-
-  if (draggingLine && draggingLine.ticket !== 'LIMIT') {
-      // (Keep existing updateDrag logic for normal positions here)
-      const rect = document.getElementById("chart-container").getBoundingClientRect();
-      const price = candleSeries.coordinateToPrice(e.clientY - rect.top);
-      if (price) {
-          // Update the temp dashed line
-          if (dragPriceLine) {
-              dragPriceLine.applyOptions({ price: price });
-          }
-      }
-  }
 }
 
 async function commitDrag(e) {
@@ -2037,8 +2175,18 @@ async function closeTrade(ticket, btnElem) {
 
 function toggleFullscreen() {
   const col = document.querySelector(".chart-col");
+  const btn = document.getElementById("btn-fullscreen");
+  
   if (col) {
     col.classList.toggle("fullscreen-mode");
+    
+    // [FIX] Toggle Icon
+    if (col.classList.contains("fullscreen-mode")) {
+        if(btn) btn.innerText = "✖"; // Exit Icon
+    } else {
+        if(btn) btn.innerText = "⛶"; // Enter Icon
+    }
+
     setTimeout(() => {
       window.dispatchEvent(new Event("resize"));
     }, 100);
@@ -2087,12 +2235,13 @@ async function fetchAccounts() {
       `http://127.0.0.1:5000/api/accounts?user_id=${currentUserId}`,
     );
     const accounts = await res.json();
+    window.allAccounts = accounts;
     allAccounts = accounts;
     const container = document.getElementById("account-list-container");
     container.innerHTML = "";
     if (accounts.length === 0) {
       container.innerHTML =
-        '<div style="text-align:center; color:#8a94a6; padding:20px;">No accounts linked.</div>';
+        '<div style="text-align:center; color:#8a94a6; padding:20px; font-size: 16px;">No accounts linked.</div>';
       return;
     }
     accounts.forEach((acc) => {
@@ -2101,21 +2250,28 @@ async function fetchAccounts() {
         .join(", ");
       if (!configSummary) configSummary = "No rules";
       const checked = acc.IS_ACTIVE ? "checked" : "";
+      
       container.innerHTML += `
-                <div class="account-card" style="opacity: ${acc.IS_ACTIVE ? 1 : 0.5}">
+                <div class="account-card" style="opacity: ${acc.IS_ACTIVE ? 1 : 0.5}; padding: 20px;">
                     <div style="display:flex; align-items:center;">
-                        <label class="toggle-switch">
-                            <input type="checkbox" ${checked} onchange="toggleAccountActive('${acc.ID}', this.checked)">
-                            <span class="slider"></span>
-                        </label>
-                        <div style="margin-left:8px;">
-                            <div style="font-weight:700; color:white;">${acc.NAME || "Account"} <span style="font-weight:400; color:#8a94a6; font-size:12px;">(${acc.USER})</span></div>
-                            <div style="font-size:11px; color:#8a94a6;">${configSummary}</div>
+                        <div style="transform: scale(1.2); transform-origin: left center; margin-right: 10px;">
+                            <label class="toggle-switch">
+                                <input type="checkbox" ${checked} onchange="toggleAccountActive('${acc.ID}', this.checked)">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div style="margin-left:10px;">
+                            <div style="font-weight:700; color:white; font-size: 20px;">
+                                ${acc.NAME || "Account"} 
+                                <span style="font-weight:400; color:#8a94a6; font-size:16px; margin-left: 8px;">(${acc.USER})</span>
+                            </div>
+                            <div style="font-size:15px; color:#8a94a6; margin-top: 6px;">${configSummary}</div>
                         </div>
                     </div>
-                    <div style="display:flex; gap:10px;">
-                        <button class="btn-secondary" onclick='editAccount("${acc.ID}")' style="font-size:11px; padding:4px 10px;">Edit</button>
-                        <button class="btn-remove-level" onclick="deleteAccount('${acc.ID}')" style="font-size:16px; width:24px; height:24px;">×</button>
+                    <div style="display:flex; gap:12px; align-items: center;">
+                        <button class="btn-secondary" onclick='editAccount("${acc.ID}")' style="font-size:15px; padding:8px 18px;">Edit</button>
+                        <button class="btn-remove-level" onclick="deleteAccount('${acc.ID}')" style="font-size:26px; width:36px; height:36px; line-height: 34px;">×</button>
                     </div>
                 </div>`;
     });
@@ -2336,13 +2492,18 @@ async function deleteAccount(id) {
 }
 function adjustQty(delta) {
   const input = document.getElementById("trade-qty");
-  let val = parseFloat(input.value) + delta;
+  let current = parseFloat(input.value) || 0;
   
+  // [FIX] Force step to be 1 or -1, ignoring the 0.5 from HTML
+  const step = delta >= 0 ? 1 : -1;
+  
+  let val = current + step;
+
   // Enforce minimum of 1
   if (val < 1) val = 1;
   
-  // Format to 1 decimal place (e.g. 1.0, 1.5)
-  input.value = val.toFixed(1); 
+  // [FIX] Remove decimals (Integer only)
+  input.value = val.toFixed(0); 
 }
 function showError(title, message) {
   if (isErrorOpen) return;
@@ -2377,12 +2538,16 @@ window.changeSymbol = changeSymbol;
 window.toggleAccountActive = toggleAccountActive;
 window.resetChart = resetChart;
 window.removeLevel = removeLevel;
-window.handleRowClick = handleRowClick;
 window.viewSpecificTrade = viewSpecificTrade;
 window.closeTrade = closeTrade;
 window.toggleSidebar = toggleSidebar;
 window.toggleHeader = toggleHeader;
 window.updateDrag = updateDrag;
-window.toggleLimitMode = toggleLimitMode;
 window.openHistoryModal = openHistoryModal;
 window.closeHistoryModal = closeHistoryModal;
+window.initLimitFromContextMenu = initLimitFromContextMenu;
+window.confirmLimitOrderFromLabel = confirmLimitOrderFromLabel;
+window.submitOrderModification = submitOrderModification;
+window.startEditOrder = startEditOrder;
+window.handleLimitInput = handleLimitInput;
+window.handlePositionInput = handlePositionInput;

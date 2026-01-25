@@ -1244,3 +1244,163 @@ select.styled-input {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+/* Context Menu */
+.custom-context-menu {
+    position: fixed; /* Fixed ensures it floats above everything */
+    z-index: 9999;   /* Very high Z-index to sit on top of the chart */
+    background: #1e222d;
+    border: 1px solid #2a2e39;
+    border-radius: 4px;
+    padding: 5px 0;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+    min-width: 140px;
+    display: none;
+    font-family: 'Inter', sans-serif;
+}
+
+.ctx-menu-item {
+    padding: 8px 15px;
+    cursor: pointer;
+    color: #d1d4dc;
+    font-size: 13px;
+    transition: background 0.1s;
+}
+
+.ctx-menu-item:hover {
+    background: #2a2e39;
+    color: white;
+}
+
+/* Place Order Button on Label */
+.btn-label-place {
+    background: #00b894;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 0px 14px;
+    margin-left: 8px;
+    font-size: 14px;
+    font-weight: 800;
+    height: 26px;
+    line-height: 26px;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.btn-label-place:hover {
+    background: #00a383;
+}
+
+.fs-stats {
+    display: none; /* Hidden by default */
+    align-items: center;
+    gap: 15px;
+    margin-right: 15px;
+}
+
+/* Only show when chart-col has fullscreen-mode class */
+.chart-col.fullscreen-mode .fs-stats {
+    display: flex;
+}
+
+.fs-stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.1;
+}
+
+.fs-label {
+    font-size: 10px;
+    color: #8a94a6;
+    font-weight: 700;
+}
+
+.fs-value {
+    font-size: 14px;
+    color: white;
+    font-weight: 700;
+    font-family: 'Inter', monospace;
+}
+
+.fs-divider {
+    width: 1px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 0 5px;
+}
+
+/* --- FULLSCREEN TRADING PANEL OVERRIDES --- */
+
+/* 1. Make the panel wider in fullscreen to accommodate stats on the left */
+.chart-col.fullscreen-mode .trading-panel {
+    width: 100%;          /* Span most of the width */
+    max-width: 1400px;   /* Cap it for ultra-wide screens */
+    margin-left: auto;
+    margin-right: auto;
+    justify-content: center; /* Keep buttons centered */
+    position: relative;      /* Context for absolute positioning */
+    padding: 15px 20px;      /* Slightly taller */
+}
+
+/* 2. Position Stats Absolutely to the Left */
+.chart-col.fullscreen-mode .fs-stats {
+    display: flex;
+    position: absolute;  /* Pull out of flow */
+    left: 40px;          /* Pin to left */
+    top: 50%;
+    transform: translateY(-50%);
+    gap: 25px;           /* More space between Bal and Eq */
+    margin-right: 0;
+}
+
+/* 3. Increase Font Sizes for Fullscreen Stats */
+.chart-col.fullscreen-mode .fs-label {
+    font-size: 13px;       /* Bigger Label */
+    color: #8a94a6;
+    margin-bottom: 4px;
+}
+
+.chart-col.fullscreen-mode .fs-value {
+    font-size: 24px;       /* Much Bigger Value */
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: 0.5px;
+}
+
+.chart-col.fullscreen-mode .fs-divider {
+    height: 35px;          /* Taller divider */
+    margin: 0 10px;
+    background: rgba(255,255,255,0.15);
+}
+
+/* --- Limit Order Inputs inside Labels --- */
+.limit-price-input {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    font-family: 'Inter', monospace;
+    font-size: 15px;
+    font-weight: 700;
+    width: 90px;
+    height: 26px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin: 0 6px;
+    text-align: center;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.limit-price-input:focus {
+    background: rgba(0, 0, 0, 0.4);
+    border-color: #36d7b7;
+    box-shadow: 0 0 0 2px rgba(54, 215, 183, 0.2);
+}
+
+/* Hide Spinners */
+.limit-price-input::-webkit-outer-spin-button,
+.limit-price-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}

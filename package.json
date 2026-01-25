@@ -4,7 +4,7 @@
   "description": "",
   "main": "frontend/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "electron . --remote-debugging-port=9222",
     "package": "electron-packager . FinWiz --platform=win32 --arch=x64 --out=dist --icon=frontend/icon.ico --overwrite --extra-resource=finwiz-server.exe"
   },
   "keywords": [],

@@ -100,9 +100,7 @@
                   <button>1D</button>
                   <button>1W</button>
                   <button onclick="resetChart()" class="btn-icon">↺</button>
-                  <button onclick="toggleFullscreen()" class="btn-icon">
-                    ⛶
-                  </button>
+                  <button id="btn-fullscreen" onclick="toggleFullscreen()" class="btn-icon">⛶</button>
                 </div>
               </div>
 
@@ -122,32 +120,34 @@
                 ></div>
               </div>
               <div class="trading-panel">
-                <button
-                  class="btn-sell-limit"
-                  onclick="toggleLimitMode('SELL')"
-                >
-                  Sell Limit
-                </button>
+                <div id="fs-stats" class="fs-stats">
+                  <div class="fs-stat-item">
+                      <span class="fs-label">BAL</span>
+                      <span id="fs-val-bal" class="fs-value">--</span>
+                  </div>
+                  <div class="fs-stat-item">
+                      <span class="fs-label">EQ</span>
+                      <span id="fs-val-equity" class="fs-value">--</span>
+                  </div>
+                  <div class="fs-divider"></div>
+              </div>
                 <button class="btn-sell" onclick="placeOrder('SELL')">
                   SELL
                 </button>
 
                 <div class="qty-control">
-                  <button onclick="adjustQty(-0.5)">−</button>
+                  <button onclick="adjustQty(-1)">−</button>
                   <input
                     type="number"
                     id="trade-qty"
                     value="1"
                     min="1"
-                    step="0.5"
+                    step="1"
                   />
-                  <button onclick="adjustQty(0.5)">+</button>
+                  <button onclick="adjustQty(1)">+</button>
                 </div>
 
                 <button class="btn-buy" onclick="placeOrder('BUY')">BUY</button>
-                <button class="btn-buy-limit" onclick="toggleLimitMode('BUY')">
-                  Buy Limit
-                </button>
               </div>
             </div>
           </div>
