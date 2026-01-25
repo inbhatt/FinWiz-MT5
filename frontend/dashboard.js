@@ -569,7 +569,6 @@ function renderPendingOrderLabels(aggregatedOrders) {
     existingLabels.forEach(el => el.remove());
 
     aggregatedOrders.forEach(o => {
-        // Hide this label if we are currently editing this specific order group
         if (limitOrderState.active && limitOrderState.isEdit) {
             if (limitOrderState.editTickets && o.tickets.some(t => limitOrderState.editTickets.includes(t))) return;
         }
@@ -587,6 +586,10 @@ function renderPendingOrderLabels(aggregatedOrders) {
         div.style.alignItems = "center";
         div.style.gap = "6px";
         
+        // [NEW] Bring to Front on Hover
+        div.addEventListener('mouseenter', () => { div.style.zIndex = "1000"; });
+        div.addEventListener('mouseleave', () => { div.style.zIndex = "50"; });
+        
         const bgColor = o.type === 'BUY' ? COL_BUY : COL_SELL;
         div.style.backgroundColor = bgColor; 
         div.style.color = "white";
@@ -596,8 +599,6 @@ function renderPendingOrderLabels(aggregatedOrders) {
         div.style.cursor = "pointer";
         div.style.pointerEvents = "auto";
         
-        // [FIX] Use direct JS function property instead of setAttribute string
-        // This ensures 'startEditOrder' is found and 'o' is passed correctly
         div.onclick = (e) => {
             e.stopPropagation(); 
             startEditOrder(o); 
@@ -616,15 +617,12 @@ function renderPendingOrderLabels(aggregatedOrders) {
         closeSpan.style.marginLeft = "4px";
         closeSpan.style.cursor = "pointer";
         
-        // [FIX] Direct JS handler for Cancel as well
         closeSpan.onclick = async (e) => {
-            e.stopPropagation(); // Critical: Stop bubbling so we don't trigger Edit Mode
-            
+            e.stopPropagation(); 
             if(confirm(`Cancel ${o.count} pending order(s)?`)) {
                 closeSpan.innerHTML = ""; 
                 closeSpan.className = "loader-spinner-small";
                 closeSpan.style.borderColor = "white transparent transparent transparent"; 
-                
                 await cancelPendingOrder(o.tickets);
             }
         };
@@ -1001,7 +999,6 @@ function renderSingleLabel(container, ticket, type, price, data) {
   const plHtml = `(<span style="color:${finalPlColor}; font-weight:700;">${sign}$${pl}</span>)`;
   const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
 
-  // Define Content HTML
   let contentHtml = "";
   
   if (type === "MAIN") {
@@ -1010,7 +1007,6 @@ function renderSingleLabel(container, ticket, type, price, data) {
       contentHtml = `<span class="label-content">${coreText} ${plHtml}</span>`;
   } else {
       // TP/SL: Label + Input + P/L
-      // [NEW] Added Input Field
       const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" 
           value="${price.toFixed(2)}" 
           onmousedown="event.stopPropagation()"
@@ -1035,9 +1031,13 @@ function renderSingleLabel(container, ticket, type, price, data) {
       div.style.gap = "8px";
       div.style.zIndex = "60"; 
 
+      // [NEW] Bring to Front on Hover
+      div.addEventListener('mouseenter', () => { div.style.zIndex = "1000"; });
+      div.addEventListener('mouseleave', () => { div.style.zIndex = "60"; });
+
       // Insert Content Placeholder
       const contentSpan = document.createElement("span");
-      contentSpan.className = "label-wrapper"; // Wrapper for innerHTML
+      contentSpan.className = "label-wrapper"; 
       div.appendChild(contentSpan);
 
       // Close Button
@@ -1079,10 +1079,12 @@ function renderSingleLabel(container, ticket, type, price, data) {
       // Event Listeners
       if (type === "MAIN") {
          div.onmouseenter = () => {
+            div.style.zIndex = "1000"; // Reinforce Z-Index
             if (menuHideTimer) clearTimeout(menuHideTimer);
             showHoverMenuFixed(ticket, type, y, div);
          };
          div.onmouseleave = () => {
+            div.style.zIndex = "60"; // Reinforce Reset
             menuHideTimer = setTimeout(() => {
                 document.getElementById("hover-menu").style.display = "none";
             }, 150);
@@ -1090,7 +1092,6 @@ function renderSingleLabel(container, ticket, type, price, data) {
       } else {
          div.style.cursor = "ns-resize";
          div.onmousedown = (e) => { 
-             // Allow dragging unless clicking the input
              if (e.target.tagName === 'INPUT') return;
              e.preventDefault(); e.stopPropagation(); 
              startDrag(ticket, type, price); 
@@ -1104,8 +1105,6 @@ function renderSingleLabel(container, ticket, type, price, data) {
 
   // --- UPDATE CONTENT (Anti-Flicker) ---
   const wrapper = div.querySelector('.label-wrapper');
-  
-  // Check if user is typing in this specific label
   const activeInput = document.activeElement;
   const isInputFocused = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
 
@@ -1175,46 +1174,143 @@ async function handlePositionInput(ticketId, type, priceStr) {
 }
 
 // 2. UPDATE showHoverMenuFixed (Allow Menu for Aggregates)
+// [UPDATED] Pass 'this' and stopPropagation to keep menu open during load
 function showHoverMenuFixed(ticket, type, y, labelElem) {
   const menu = document.getElementById("hover-menu");
+  
   if (!priceLines[ticket]) return;
   const pos = priceLines[ticket].data;
 
   let html = "";
   
+  // Center items vertically
+  menu.style.display = "flex";
+  menu.style.alignItems = "center"; 
+  
   if (type === "MAIN") {
-      // [FIX] Only show buttons if TP/SL are MISSING or INCONSISTENT (value <= 0)
+      // 1. Standard Buttons
       if (!pos.tp || pos.tp <= 0)
         html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'TP', ${pos.price_current})">+ TP</button>`;
       
       if (!pos.sl || pos.sl <= 0)
         html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', 'SL', ${pos.price_current})">+ SL</button>`;
       
-      // Removed "Close" button from menu since Label has 'x'
+      // 2. SL to Cost Logic
+      let canMove = false;
+      let isAggregate = pos.tickets && pos.tickets.length > 1;
+      
+      const entryPrice = isAggregate ? pos.price_open : pos.price_open;
+      const currentBid = pos.acc_bid || pos.price_current; 
+      const currentAsk = pos.acc_ask || pos.price_current;
+      
+      if (pos.type === 'BUY') {
+          if (currentBid > entryPrice) canMove = true;
+      } else {
+          if (currentAsk < entryPrice) canMove = true;
+      }
+
+      // Check if SL is already at cost
+      const currentSl = pos.sl || 0;
+      const isAlreadyAtCost = Math.abs(currentSl - entryPrice) < (entryPrice * 0.0001);
+
+      if (canMove && !isAlreadyAtCost) {
+           const btnText = isAggregate ? "All SL to BE" : "SL to Cost";
+           // [CHANGE]: Added event.stopPropagation() and passed 'this'
+           html += `<button class="hover-btn" onmousedown="event.stopPropagation(); moveSlToCost('${ticket}', this)">${btnText}</button>`;
+      }
+      
+      // 3. BE Price Display
+      html += `<div style="font-size: 13px; color: #fff; font-weight: 600; margin-left: 10px; white-space: nowrap;">
+                  BE: ${entryPrice.toFixed(2)}
+               </div>`;
+      
   } else if (type === "TP" || type === "SL") {
-     // Menu for existing lines (Move)
      html += `<button class="hover-btn" onmousedown="startDrag('${ticket}', '${type}', ${type === "TP" ? pos.tp : pos.sl})">Move</button>`;
   }
 
-  // If no buttons needed (e.g. both TP and SL are set on Main), Hide Menu
   if (!html) {
       menu.style.display = "none";
       return;
   }
 
   menu.innerHTML = html;
-  menu.style.display = "flex";
   
+  // Positioning
   const wrapper = document.querySelector(".chart-area-wrapper");
   if (wrapper) {
     const wrapperRect = wrapper.getBoundingClientRect();
     const labelRect = labelElem.getBoundingClientRect();
+    
     const leftPos = labelRect.right - wrapperRect.left + 10;
     const topPos = labelRect.top - wrapperRect.top + labelRect.height / 2;
+    
     menu.style.right = "auto";
     menu.style.left = `${leftPos}px`;
     menu.style.top = `${topPos}px`;
     menu.style.transform = "translateY(-50%)";
+  }
+}
+
+// [UPDATED] Accepts btnElem for loading state
+async function moveSlToCost(ticket, btnElem) {
+  if (!priceLines[ticket]) return;
+  const pos = priceLines[ticket].data;
+
+  // 1. UI Loading Feedback
+  if (btnElem) {
+      btnElem.innerText = "...";
+      btnElem.style.opacity = "0.7";
+      btnElem.style.pointerEvents = "none"; // Prevent double clicks
+  }
+
+  let targets = [];
+
+  if (pos.tickets && pos.tickets.length > 0) {
+      // AGGREGATE MODE
+      targets = pos.tickets.map(tId => {
+          let childPrice = pos.price_open; // Fallback
+          
+          if (window.SYSTEM_STATE && window.SYSTEM_STATE.positions) {
+              for (const master of window.SYSTEM_STATE.positions) {
+                  if (master.sub_positions) {
+                      const found = master.sub_positions.find(sub => sub.ticket === tId);
+                      if (found) {
+                          childPrice = found.price; 
+                          break;
+                      }
+                  }
+              }
+          }
+
+          return { ticket: tId, sl: childPrice };
+      });
+  } else {
+      // SINGLE MODE
+      targets = [{ ticket: ticket, sl: pos.price_open }];
+  }
+
+  // Send API Requests
+  const promises = targets.map(t => {
+      const payload = { 
+          ticket: t.ticket, 
+          user_id: currentUserId, 
+          sl: t.sl 
+      };
+      return fetch("http://127.0.0.1:5000/api/modify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+      });
+  });
+
+  try {
+      await Promise.all(promises);
+      await fetchDashboardData(); 
+  } catch (e) {
+      showError("SL Update Failed", e.message);
+  } finally {
+      // Hide the menu only after the operation finishes
+      document.getElementById("hover-menu").style.display = "none";
   }
 }
 
@@ -1466,7 +1562,7 @@ function handleLimitInput(type, valueStr) {
 function renderLimitLabels(container) {
     let totalVol = 0;
 
-    // 1. Get Total Volume from Active Accounts (Config)
+    // 1. Get Total Volume from Active Accounts
     const accounts = window.allAccounts || [];
     const sym = window.currentSymbol || currentSymbol;
 
@@ -1488,10 +1584,9 @@ function renderLimitLabels(container) {
         });
     }
 
-    // Fallback: If no account config volume found, default to 1 (so we don't multiply by 0)
     if (totalVol === 0) totalVol = 1;
 
-    // 2. [UPDATED] Get Multiplier from the Input Box (between Buy/Sell buttons)
+    // 2. Get Multiplier
     const qtyInput = document.getElementById('trade-qty');
     const inputMultiplier = qtyInput ? (parseFloat(qtyInput.value) || 1) : 1;
 
@@ -1542,14 +1637,10 @@ function renderLimitLabels(container) {
                 <span class="no-drag" style="margin-left:8px; cursor:pointer; font-size:16px;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>
              `;
         } else {
-             // --- P/L CALCULATION ---
-             // Formula: Distance * Total Config Volume * Input Box Multiplier
              const dist = Math.abs(def.price - limitOrderState.entryPrice);
              const plVal = dist * totalVol * inputMultiplier;
-
              const sign = plVal >= 0 ? "+" : "-";
              const absPl = Math.abs(plVal).toFixed(2);
-             
              contentHtml = `${def.type} ${inputHtml} (${sign}$${absPl})`;
         }
 
@@ -1568,6 +1659,10 @@ function renderLimitLabels(container) {
             div.style.cursor = "ns-resize";
             div.style.zIndex = "61";
             div.style.pointerEvents = "auto"; 
+            
+            // [NEW] Bring to Front on Hover
+            div.addEventListener('mouseenter', () => { div.style.zIndex = "1000"; });
+            div.addEventListener('mouseleave', () => { div.style.zIndex = "61"; });
             
             div.onmousedown = (e) => { 
                 if (e.target.classList.contains('no-drag') || e.target.tagName === 'INPUT') return;
@@ -2551,3 +2646,4 @@ window.submitOrderModification = submitOrderModification;
 window.startEditOrder = startEditOrder;
 window.handleLimitInput = handleLimitInput;
 window.handlePositionInput = handlePositionInput;
+window.moveSlToCost = moveSlToCost;

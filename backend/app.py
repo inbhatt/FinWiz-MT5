@@ -99,7 +99,6 @@ def sync_all_accounts_data(user_id):
     global SYSTEM_STATE
     if not user_id: return
 
-    # Prevent stacking syncs
     if lock.locked(): return
 
     try:
@@ -116,7 +115,7 @@ def sync_all_accounts_data(user_id):
             total_balance = 0.0
             total_equity = 0.0
             global_positions = []
-            global_orders = []  # NEW: Aggregated pending orders
+            global_orders = []
 
             for acc in db_accounts:
                 path = acc.get('TERMINAL_PATH')
@@ -129,10 +128,11 @@ def sync_all_accounts_data(user_id):
                     info = mt5.account_info()
                     raw_pos = mt5.positions_get()
 
-                    # Fetch History
+                    # History & Orders
                     from_date = datetime.now() - timedelta(days=30)
                     to_date = datetime.now() + timedelta(days=1)
                     raw_deals = mt5.history_deals_get(from_date, to_date)
+                    raw_orders = mt5.orders_get()
 
                     if info:
                         acc_login = int(info.login)
@@ -140,85 +140,91 @@ def sync_all_accounts_data(user_id):
                         total_equity += info.equity
 
                         pos_list = []
-                        orders_list = []  # Local list for this account
+                        orders_list = []
+                        history_list = []
 
-                        # 1. POSITIONS
+                        # 1. POSITIONS (With NEW Spread Logic)
                         if raw_pos:
                             for p in raw_pos:
                                 sym_info = mt5.symbol_info(p.symbol)
                                 c_size = sym_info.trade_contract_size if sym_info else 100000.0
 
+                                # [NEW] Account-Specific Prices
+                                tick = mt5.symbol_info_tick(p.symbol)
+                                acc_bid = tick.bid if tick else p.price_current
+                                acc_ask = tick.ask if tick else p.price_current
+
                                 pos_obj = {
-                                    "ticket": p.ticket, "symbol": p.symbol, "type": "BUY" if p.type == 0 else "SELL",
-                                    "volume": p.volume, "price_open": p.price_open, "sl": p.sl, "tp": p.tp,
-                                    "profit": p.profit, "swap": p.swap, "contract_size": c_size,
-                                    "account": acc.get('NAME')
+                                    "ticket": p.ticket,
+                                    "symbol": p.symbol,
+                                    "type": "BUY" if p.type == 0 else "SELL",
+                                    "volume": p.volume,
+                                    "price_open": p.price_open,
+                                    "price_current": p.price_current,
+                                    "sl": p.sl,
+                                    "tp": p.tp,
+                                    "profit": p.profit,
+                                    "swap": p.swap,
+                                    "contract_size": c_size,
+                                    "account": acc.get('NAME'),
+                                    "acc_bid": acc_bid,  # Kept for SL to Cost
+                                    "acc_ask": acc_ask  # Kept for SL to Cost
                                 }
                                 pos_list.append(pos_obj)
-                                global_positions.append(pos_obj)  # Add to global
+                                global_positions.append(pos_obj)
                                 SYSTEM_STATE["prices"][p.symbol] = p.price_current
 
-                        # 2. PENDING ORDERS (NEW)
-                        raw_orders = mt5.orders_get()
+                        # 2. ORDERS
                         if raw_orders:
                             for o in raw_orders:
-                                # Determine Type (Limit vs Stop)
-                                # For simplicity, we map Buy Limit/Stop to BUY and Sell Limit/Stop to SELL
-                                # You can add more granular types if needed
-                                order_side = "BUY" if o.type in [mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP,
-                                                                 mt5.ORDER_TYPE_BUY_STOP_LIMIT] else "SELL"
-
                                 order_obj = {
                                     "ticket": o.ticket,
                                     "symbol": o.symbol,
-                                    "type": order_side,
-                                    "order_type": "LIMIT",  # Simplified for UI
+                                    "type": "BUY_LIMIT" if o.type == 2 else "SELL_LIMIT" if o.type == 3 else "BUY_STOP" if o.type == 4 else "SELL_STOP",
                                     "volume": o.volume_current,
-                                    "price_open": o.price_open,  # Entry Price
+                                    "price_open": o.price_open,
                                     "sl": o.sl,
                                     "tp": o.tp,
-                                    "account": acc.get('NAME', 'Unknown')
+                                    "account": acc.get('NAME')
                                 }
                                 orders_list.append(order_obj)
-                                global_orders.append(order_obj)  # Add to global
+                                global_orders.append(order_obj)
 
                         # 3. HISTORY
-                        hist_list = []
                         if raw_deals:
-                            entry_map = {d.position_id: d.price for d in raw_deals if d.entry == mt5.DEAL_ENTRY_IN}
-
                             for d in raw_deals:
-                                if d.entry == mt5.DEAL_ENTRY_OUT:
-                                    entry_price = entry_map.get(d.position_id, 0.0)
-
-                                    hist_list.append({
-                                        "time": datetime.fromtimestamp(d.time).strftime('%Y-%m-%d %H:%M'),
-                                        "timestamp": int(d.time), "symbol": d.symbol,
-                                        "type": "BUY" if d.type == 1 else "SELL",
+                                if d.entry == 1:
+                                    h_obj = {
+                                        "ticket": d.ticket,
+                                        "symbol": d.symbol,
+                                        "type": "BUY" if d.type == 0 else "SELL",
                                         "volume": d.volume,
                                         "price": d.price,
-                                        "entry_price": entry_price,
-                                        "profit": d.profit + d.swap + d.commission,
+                                        "profit": d.profit,
+                                        "time": d.time,
                                         "account": acc.get('NAME')
-                                    })
+                                    }
+                                    history_list.append(h_obj)
 
-                        # Update Account Specific State
+                        # Account State
                         SYSTEM_STATE["accounts"][acc_login] = {
                             "name": acc.get('NAME'),
                             "balance": info.balance,
+                            "equity": info.equity,
                             "margin_used": info.margin,
                             "positions": pos_list,
-                            "orders": orders_list,  # Store here too
-                            "history": hist_list,
+                            "orders": orders_list,
+                            "history": history_list,
                             "path": path,
                             "config": acc.get('SYMBOL_CONFIG', {})
                         }
 
-            # Update Global Aggregates (Crucial for Frontend Dashboard)
+            # --- RESTORED ORIGINAL STRUCTURE ---
+            # Writing directly to root keys as requested
             SYSTEM_STATE["balance"] = total_balance
             SYSTEM_STATE["equity"] = total_equity
             SYSTEM_STATE["positions"] = global_positions
-            SYSTEM_STATE["orders"] = global_orders  # <--- This is what the frontend reads
+            SYSTEM_STATE["orders"] = global_orders
 
             if SYSTEM_STATE["master_path"]:
                 switch_context(SYSTEM_STATE["master_path"])
