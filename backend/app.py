@@ -16,7 +16,13 @@ CORS(app)
 SYSTEM_STATE = {
     "accounts": {},
     "prices": {},
-    "master_path": None
+    "master_path": None,
+    # Initialize these so the endpoint doesn't crash on first load
+    "balance": 0.0,
+    "equity": 0.0,
+    "positions": [],
+    "orders": [],
+    "last_update": 0
 }
 
 lock = threading.Lock()
@@ -95,6 +101,7 @@ def get_actual_symbol(requested_symbol):
     return requested_symbol
 
 # --- CORE: SYNC WORKER ---
+# --- CORE: SYNC WORKER ---
 def sync_all_accounts_data(user_id):
     global SYSTEM_STATE
     if not user_id: return
@@ -127,12 +134,12 @@ def sync_all_accounts_data(user_id):
 
                     info = mt5.account_info()
                     raw_pos = mt5.positions_get()
+                    raw_orders = mt5.orders_get()
 
-                    # History & Orders
+                    # Fetch History
                     from_date = datetime.now() - timedelta(days=30)
                     to_date = datetime.now() + timedelta(days=1)
                     raw_deals = mt5.history_deals_get(from_date, to_date)
-                    raw_orders = mt5.orders_get()
 
                     if info:
                         acc_login = int(info.login)
@@ -143,44 +150,41 @@ def sync_all_accounts_data(user_id):
                         orders_list = []
                         history_list = []
 
-                        # 1. POSITIONS (With NEW Spread Logic)
+                        # 1. POSITIONS
                         if raw_pos:
                             for p in raw_pos:
                                 sym_info = mt5.symbol_info(p.symbol)
                                 c_size = sym_info.trade_contract_size if sym_info else 100000.0
-
-                                # [NEW] Account-Specific Prices
                                 tick = mt5.symbol_info_tick(p.symbol)
                                 acc_bid = tick.bid if tick else p.price_current
                                 acc_ask = tick.ask if tick else p.price_current
 
                                 pos_obj = {
-                                    "ticket": p.ticket,
-                                    "symbol": p.symbol,
-                                    "type": "BUY" if p.type == 0 else "SELL",
-                                    "volume": p.volume,
-                                    "price_open": p.price_open,
-                                    "price_current": p.price_current,
-                                    "sl": p.sl,
-                                    "tp": p.tp,
-                                    "profit": p.profit,
-                                    "swap": p.swap,
-                                    "contract_size": c_size,
-                                    "account": acc.get('NAME'),
-                                    "acc_bid": acc_bid,  # Kept for SL to Cost
-                                    "acc_ask": acc_ask  # Kept for SL to Cost
+                                    "ticket": p.ticket, "symbol": p.symbol, "type": "BUY" if p.type == 0 else "SELL",
+                                    "volume": p.volume, "price_open": p.price_open, "price_current": p.price_current,
+                                    "sl": p.sl, "tp": p.tp, "profit": p.profit, "swap": p.swap,
+                                    "contract_size": c_size, "account": acc.get('NAME'),
+                                    "acc_bid": acc_bid, "acc_ask": acc_ask
                                 }
                                 pos_list.append(pos_obj)
                                 global_positions.append(pos_obj)
                                 SYSTEM_STATE["prices"][p.symbol] = p.price_current
 
-                        # 2. ORDERS
+                        # 2. ORDERS (Robust Type Check)
                         if raw_orders:
                             for o in raw_orders:
+                                # MT5 Order Types: 2=Buy Limit, 4=Buy Stop, 6=Buy Stop Limit
+                                # Explicitly checking integers to avoid constant mismatch
+                                is_buy = o.type in [2, 4, 6, mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP,
+                                                    mt5.ORDER_TYPE_BUY_STOP_LIMIT]
+
+                                order_side = "BUY" if is_buy else "SELL"
+
                                 order_obj = {
                                     "ticket": o.ticket,
                                     "symbol": o.symbol,
-                                    "type": "BUY_LIMIT" if o.type == 2 else "SELL_LIMIT" if o.type == 3 else "BUY_STOP" if o.type == 4 else "SELL_STOP",
+                                    "type": order_side,
+                                    "order_type": "LIMIT",
                                     "volume": o.volume_current,
                                     "price_open": o.price_open,
                                     "sl": o.sl,
@@ -192,35 +196,24 @@ def sync_all_accounts_data(user_id):
 
                         # 3. HISTORY
                         if raw_deals:
+                            entry_map = {d.position_id: d.price for d in raw_deals if d.entry == mt5.DEAL_ENTRY_IN}
                             for d in raw_deals:
-                                if d.entry == 1:
-                                    h_obj = {
-                                        "ticket": d.ticket,
-                                        "symbol": d.symbol,
-                                        "type": "BUY" if d.type == 0 else "SELL",
-                                        "volume": d.volume,
-                                        "price": d.price,
-                                        "profit": d.profit,
-                                        "time": d.time,
-                                        "account": acc.get('NAME')
-                                    }
-                                    history_list.append(h_obj)
+                                if d.entry == mt5.DEAL_ENTRY_OUT:
+                                    entry_price = entry_map.get(d.position_id, 0.0)
+                                    history_list.append({
+                                        "time": datetime.fromtimestamp(d.time).strftime('%Y-%m-%d %H:%M'),
+                                        "timestamp": int(d.time), "symbol": d.symbol,
+                                        "type": "BUY" if d.type == 1 else "SELL",
+                                        "volume": d.volume, "price": d.price, "entry_price": entry_price,
+                                        "profit": d.profit + d.swap + d.commission, "account": acc.get('NAME')
+                                    })
 
-                        # Account State
                         SYSTEM_STATE["accounts"][acc_login] = {
-                            "name": acc.get('NAME'),
-                            "balance": info.balance,
-                            "equity": info.equity,
-                            "margin_used": info.margin,
-                            "positions": pos_list,
-                            "orders": orders_list,
-                            "history": history_list,
-                            "path": path,
-                            "config": acc.get('SYMBOL_CONFIG', {})
+                            "name": acc.get('NAME'), "balance": info.balance, "equity": info.equity,
+                            "margin_used": info.margin, "positions": pos_list, "orders": orders_list,
+                            "history": history_list, "path": path, "config": acc.get('SYMBOL_CONFIG', {})
                         }
 
-            # --- RESTORED ORIGINAL STRUCTURE ---
-            # Writing directly to root keys as requested
             SYSTEM_STATE["balance"] = total_balance
             SYSTEM_STATE["equity"] = total_equity
             SYSTEM_STATE["positions"] = global_positions
@@ -343,7 +336,7 @@ def get_dashboard_data():
         m['sub_positions'].sort(key=lambda x: x['account_name'])
         final_positions.append(m)
 
-    all_history.sort(key=lambda x: x['timestamp'], reverse=True)
+    all_history.sort(key=lambda x: x['time'], reverse=True)
 
     return jsonify({
         "balance": round(total_balance, 2), "equity": round(total_equity, 2),

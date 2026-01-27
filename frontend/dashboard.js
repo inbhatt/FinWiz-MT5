@@ -1438,12 +1438,14 @@ function startLimitModeCustom(type, price) {
 }
 
 function cancelLimitMode() {
+  // 1. Reset State
   limitOrderState.active = false;
   limitOrderState.isEdit = false;
-  limitOrderState.isSubmitting = false; // [Reset]
+  limitOrderState.isSubmitting = false; 
   limitOrderState.editTicket = null;
   limitOrderState.editTickets = null;
   
+  // 2. Remove Lines from Chart
   if (limitOrderState.lines.entry) candleSeries.removePriceLine(limitOrderState.lines.entry);
   if (limitOrderState.lines.tp) candleSeries.removePriceLine(limitOrderState.lines.tp);
   if (limitOrderState.lines.sl) candleSeries.removePriceLine(limitOrderState.lines.sl);
@@ -1451,7 +1453,17 @@ function cancelLimitMode() {
   limitOrderState.lines = { entry: null, tp: null, sl: null };
   setExistingLinesStyle(LightweightCharts.LineStyle.Solid);
   
+  // 3. UI Cleanup
   document.querySelectorAll('.btn-buy-limit, .btn-sell-limit').forEach(b => b.classList.remove('active'));
+
+  // 4. Force Remove Labels from DOM (Crucial Fix)
+  // We manually remove them to ensure no ID conflicts or stale event listeners exist
+  ['limit-lbl-ENTRY', 'limit-lbl-TP', 'limit-lbl-SL'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.remove();
+  });
+
+  // 5. Refresh Left Labels
   updateLeftLabels();
 }
 
@@ -1562,20 +1574,18 @@ function handleLimitInput(type, valueStr) {
 function renderLimitLabels(container) {
     let totalVol = 0;
 
-    // 1. Get Total Volume from Active Accounts
+    // 1. Get Total Volume
     const accounts = window.allAccounts || [];
     const sym = window.currentSymbol || currentSymbol;
 
     if (accounts.length > 0 && sym) {
         const rawSym = sym.toUpperCase();
-        
         accounts.forEach(acc => {
             if (acc.IS_ACTIVE && acc.SYMBOL_CONFIG) {
                 const configKey = Object.keys(acc.SYMBOL_CONFIG).find(k => {
                     const confSym = k.toUpperCase();
                     return rawSym === confSym || rawSym.startsWith(confSym);
                 });
-
                 if (configKey) {
                     const vol = parseFloat(acc.SYMBOL_CONFIG[configKey].VOLUME);
                     if (!isNaN(vol)) totalVol += vol;
@@ -1583,12 +1593,12 @@ function renderLimitLabels(container) {
             }
         });
     }
-
     if (totalVol === 0) totalVol = 1;
 
     // 2. Get Multiplier
     const qtyInput = document.getElementById('trade-qty');
     const inputMultiplier = qtyInput ? (parseFloat(qtyInput.value) || 1) : 1;
+    const finalVol = totalVol * inputMultiplier;
 
     const definitions = [
         { type: 'ENTRY', price: limitOrderState.entryPrice, color: limitOrderState.type === 'BUY' ? COL_BUY : COL_SELL },
@@ -1607,9 +1617,11 @@ function renderLimitLabels(container) {
         }
 
         // --- CONTENT GENERATION ---
+        // Added onclick="this.focus()" for redundancy
         const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" 
             value="${def.price.toFixed(2)}" 
-            onmousedown="event.stopPropagation()"
+            onmousedown="this.focus(); event.stopPropagation();"
+            onclick="this.focus(); event.stopPropagation();" 
             onkeyup="if(event.key === 'Enter') handleLimitInput('${def.type}', this.value)"
             onblur="handleLimitInput('${def.type}', this.value)" 
         />`;
@@ -1637,11 +1649,12 @@ function renderLimitLabels(container) {
                 <span class="no-drag" style="margin-left:8px; cursor:pointer; font-size:16px;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>
              `;
         } else {
-             const dist = Math.abs(def.price - limitOrderState.entryPrice);
-             const plVal = dist * totalVol * inputMultiplier;
-             const sign = plVal >= 0 ? "+" : "-";
-             const absPl = Math.abs(plVal).toFixed(2);
-             contentHtml = `${def.type} ${inputHtml} (${sign}$${absPl})`;
+             const plVal = calculatePL(currentSymbol, limitOrderState.type, finalVol, limitOrderState.entryPrice, def.price);
+             const plNum = parseFloat(plVal);
+             const sign = plNum >= 0 ? "+" : ""; 
+             const plColor = "#ffffff"; 
+             
+             contentHtml = `${def.type} ${inputHtml} (<span style="color:${plColor}">${sign}$${plVal}</span>)`;
         }
 
         // --- DOM UPDATES ---
@@ -1660,28 +1673,34 @@ function renderLimitLabels(container) {
             div.style.zIndex = "61";
             div.style.pointerEvents = "auto"; 
             
-            // [NEW] Bring to Front on Hover
             div.addEventListener('mouseenter', () => { div.style.zIndex = "1000"; });
             div.addEventListener('mouseleave', () => { div.style.zIndex = "61"; });
             
             div.onmousedown = (e) => { 
-                if (e.target.classList.contains('no-drag') || e.target.tagName === 'INPUT') return;
+                if (e.target.classList.contains('no-drag') || e.target.tagName === 'INPUT') {
+                    return; 
+                }
                 e.preventDefault(); e.stopPropagation(); 
                 startDrag('LIMIT', def.type, def.price); 
             };
             container.appendChild(div);
-        } else {
-            const activeInput = document.activeElement;
-            const isInputFocused = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
-            if (!isInputFocused) {
-                 div.innerHTML = contentHtml;
-            }
+        }
+
+        // --- CHECK FOCUS STATE ---
+        const activeInput = document.activeElement;
+        const isFocusedHere = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
+        
+        // Only update HTML if user is NOT typing
+        if (!isFocusedHere) {
+             div.innerHTML = contentHtml;
         }
 
         div.style.top = `${y}px`;
         div.style.backgroundColor = def.color;
         div.style.color = "white";
-        if(!div.innerHTML) div.innerHTML = contentHtml; 
+        
+        // Fallback: If empty, fill it regardless of focus state
+        if(!div.innerHTML.trim()) div.innerHTML = contentHtml; 
     });
 }
 
