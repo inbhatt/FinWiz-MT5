@@ -39,6 +39,15 @@ ipcMain.handle('show-alert', async (event, title, message) => {
     });
 });
 
+ipcMain.handle('focus-window', () => {
+    if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+        // Optional: Flash frame to grab attention if focus fails
+        mainWindow.flashFrame(true);
+    }
+});
+
 // --- START PYTHON BACKEND (YOUR ORIGINAL CODE) ---
 function startBackend() {
     if (backendProcess) {

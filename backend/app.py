@@ -797,5 +797,30 @@ def login():
         return jsonify({"error": str(e)}), 500
 
 
+# [ADD THIS NEW ENDPOINT TO backend/app.py BEFORE if __name__ == '__main__':]
+
+@app.route('/api/symbols', methods=['GET'])
+def get_symbols():
+    try:
+        # Fetch all documents from SYMBOLS collection
+        # Doc ID = Symbol Name (e.g. "XAUUSD")
+        # Fields = DESC, TRAIL_AMOUNT
+        docs = db.collection('SYMBOLS').stream()
+
+        symbols = []
+        for doc in docs:
+            data = doc.to_dict()
+            symbols.append({
+                "sym": doc.id,
+                "desc": data.get("DESC", ""),
+                "trail": data.get("TRAIL_AMOUNT", 0.5)  # Default to 0.5 if missing
+            })
+
+        return jsonify(symbols)
+    except Exception as e:
+        print(f"Error fetching symbols: {e}")
+        return jsonify([])
+
+
 if __name__ == '__main__':
     app.run(port=5000, debug=True, use_reloader=False, threaded=True)

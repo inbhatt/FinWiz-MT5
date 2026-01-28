@@ -232,63 +232,59 @@
             + Link New Trading Account
           </button>
           <div id="account-form" class="form-panel" style="display: none">
-            <div
-              style="
-                display: flex;
-                justify-content: space-between;
-                margin-bottom: 15px;
-              "
-            >
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 15px; flex-shrink: 0;">
               <h4 id="form-title" style="color: white; margin: 0">
                 Add Account
               </h4>
             </div>
-            <input type="hidden" id="inp-acc-id" />
-            <div class="form-grid">
-              <div class="input-group">
-                <label>Account Name</label
-                ><input type="text" id="inp-name" class="styled-input" />
-              </div>
-              <div class="input-group">
-                <label>Login ID</label
-                ><input type="number" id="inp-login" class="styled-input" />
-              </div>
-              <div class="input-group">
-                <label>Broker Server</label
-                ><input type="text" id="inp-server" class="styled-input" />
-              </div>
-              <div class="input-group">
-                <label>Password</label
-                ><input type="password" id="inp-pass" class="styled-input" />
-              </div>
-              <div class="input-group" style="grid-column: 1 / -1">
-                <label>Terminal Path (.exe)</label
-                ><input type="text" id="inp-path" class="styled-input" />
-              </div>
+            
+            <div class="account-scroll-area">
+                <input type="hidden" id="inp-acc-id" />
+                
+                <div class="form-grid">
+                  <div class="input-group">
+                    <label>Account Name</label>
+                    <input type="text" id="inp-name" class="styled-input" />
+                  </div>
+                  <div class="input-group">
+                    <label>Login ID</label>
+                    <input type="number" id="inp-login" class="styled-input" />
+                  </div>
+                  <div class="input-group">
+                    <label>Broker Server</label>
+                    <input type="text" id="inp-server" class="styled-input" />
+                  </div>
+                  <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="inp-pass" class="styled-input" />
+                  </div>
+                  <div class="input-group" style="grid-column: 1 / -1">
+                    <label>Terminal Path (.exe)</label>
+                    <input type="text" id="inp-path" class="styled-input" />
+                  </div>
+                </div>
+
+                <div class="config-section">
+                  <div class="config-header">
+                    <label>Symbol Rules</label>
+                    <button class="btn-dashed" onclick="addSymbolConfigRow()">
+                      + Add Rule
+                    </button>
+                  </div>
+                  <div id="symbol-config-list"></div>
+                </div>
             </div>
-            <div class="config-section">
-              <div class="config-header">
-                <label>Symbol Rules</label
-                ><button class="btn-dashed" onclick="addSymbolConfigRow()">
-                  + Add Rule
-                </button>
-              </div>
-              <div id="symbol-config-list"></div>
-            </div>
-            <div
-              style="
-                margin-top: 25px;
-                display: flex;
-                gap: 12px;
-                justify-content: flex-end;
-              "
-            >
+
+            <div class="account-footer">
               <button class="btn-secondary" onclick="hideAccountForm()">
-                Cancel</button
-              ><button class="btn-primary" onclick="saveAccountToDb()">
+                Cancel
+              </button>
+              <button class="btn-primary" onclick="saveAccountToDb()">
                 Save Account
               </button>
             </div>
+
           </div>
         </div>
       </div>
