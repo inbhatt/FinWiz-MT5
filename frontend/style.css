@@ -2093,3 +2093,149 @@ select.styled-input {
 #history-modal .modal-body::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
+/* --- POSITIONS TABLE (Fixed Alignment, Widths & Fonts) --- */
+
+#positions-table {
+    width: 100%;
+    table-layout: fixed; /* Keeps columns stable */
+    border-collapse: collapse;
+}
+
+/* Header & Cell Base Styles */
+#positions-table th,
+#positions-table td {
+    padding: 14px 8px; /* Increased vertical padding */
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* HEADER FONT SIZE */
+#positions-table th {
+    font-size: 14px; /* Increased Header Size */
+    font-weight: 700;
+    color: #8a94a6;
+    letter-spacing: 0.5px;
+}
+
+/* DATA FONT SIZE (Matches P/L Look) */
+#positions-table td {
+    font-size: 16px; /* Increased Data Size */
+    font-weight: 600;
+}
+
+/* SYMBOL NAME SIZE */
+.symbol-name {
+    font-size: 17px !important; /* Bigger Symbol Name */
+    font-weight: 800;
+}
+
+/* --- COLUMN CONFIGURATION (Total ~100%) --- */
+
+/* 1. Symbol (24%) - Widened to fix cut-off text */
+#positions-table th:nth-child(1),
+#positions-table td:nth-child(1) {
+    width: 24%; 
+    text-align: left;
+    padding-left: 20px;
+}
+
+/* 2. Qty (8%) */
+#positions-table th:nth-child(2),
+#positions-table td:nth-child(2) { 
+    width: 8%; 
+    text-align: center; 
+}
+
+/* 3. Avg Price (11%) */
+#positions-table th:nth-child(3),
+#positions-table td:nth-child(3) { 
+    width: 11%; 
+    text-align: right; 
+    font-variant-numeric: tabular-nums;
+}
+
+/* 4. LTP (11%) */
+#positions-table th:nth-child(4),
+#positions-table td:nth-child(4) { 
+    width: 11%; 
+    text-align: right; 
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: #fff;
+}
+
+/* 5. SL (12%) */
+#positions-table th:nth-child(5),
+#positions-table td:nth-child(5) { 
+    width: 12%; 
+    text-align: center; 
+}
+
+/* 6. TP (12%) */
+#positions-table th:nth-child(6),
+#positions-table td:nth-child(6) { 
+    width: 12%; 
+    text-align: center; 
+}
+
+/* 7. P/L (14%) - Wider for large numbers */
+#positions-table th:nth-child(7),
+#positions-table td:nth-child(7) { 
+    width: 14%; 
+    text-align: right; 
+    padding-right: 25px; 
+    font-weight: 800; /* Bold P/L */
+    font-variant-numeric: tabular-nums;
+}
+
+/* 8. Action (8%) */
+#positions-table th:nth-child(8),
+#positions-table td:nth-child(8) { 
+    width: 8%; 
+    text-align: center; 
+}
+
+/* --- SL/TP CELL (Larger Vertical Text + Centered X) --- */
+
+.sl-tp-container {
+    display: flex;
+    flex-direction: row;      /* Side-by-side: [Text Block] [X] */
+    align-items: center;      /* Vertically center the X with the block */
+    justify-content: center;  /* Center the whole thing in the cell */
+    gap: 12px;                /* Space between the text and the X */
+}
+
+.sl-tp-info {
+    display: flex;
+    flex-direction: column;   /* Stack Price on top of PnL */
+    align-items: center;      /* Center aligns the two text lines */
+    line-height: 1.3;
+}
+
+.sl-tp-price {
+    font-size: 16px;          /* Increased Size */
+    font-weight: 700;
+    color: var(--text-white);
+}
+
+.sl-tp-pnl {
+    font-size: 14px;          /* Increased Size */
+    font-weight: 600;
+    opacity: 0.9;
+}
+
+.remove-x {
+    cursor: pointer;
+    font-weight: 800;
+    font-size: 22px;          
+    color: #666;
+    line-height: 1;
+    transition: color 0.2s;
+    display: flex;
+    align-items: center;
+}
+.remove-x:hover { color: #ff5555; }
