@@ -52,6 +52,21 @@ const COL_SELL = "#ff5555";
 const COL_TP = "#00b894";
 const COL_SL = "#d35400";
 
+const TF_SECONDS = {
+  "1M": 60,
+  "3M": 180,
+  "5M": 300,
+  "15M": 900,
+  "30M": 1800,
+  "1H": 3600,
+  "4H": 14400,
+  "1D": 86400,
+  "1W": 604800,
+};
+
+let currentPriceLine = null; // Stores the reference to the price line
+let lastKnownPrice = 0;
+
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     if (!currentMobile) window.location.href = "index.html";
@@ -116,185 +131,321 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // --- NEW HELPER: GROUP POSITIONS (Fixes Bug 2) ---
 function groupPositions(flatPositions) {
-    const grouped = {};
-    const masterList = [];
+  const grouped = {};
+  const masterList = [];
 
-    if (!flatPositions) return [];
+  if (!flatPositions) return [];
 
-    flatPositions.forEach(pos => {
-        // Key: Symbol + Direction (e.g., XAUUSD_BUY)
-        const key = `${pos.symbol}_${pos.type}`;
-        
-        if (!grouped[key]) {
-            grouped[key] = {
-                ticket: key, // Master Ticket ID
-                symbol: pos.symbol,
-                type: pos.type,
-                volume: 0,
-                priceProd: 0,
-                profit: 0,
-                sub_positions: [],
-                // Aggregated Fields for labels
-                sl: pos.sl,
-                tp: pos.tp,
-                sl_consistent: true,
-                tp_consistent: true
-            };
-            masterList.push(grouped[key]);
-        }
+  flatPositions.forEach((pos) => {
+    // Key: Symbol + Direction (e.g., XAUUSD_BUY)
+    const key = `${pos.symbol}_${pos.type}`;
 
-        const master = grouped[key];
-        
-        // Aggregate Math
-        master.volume += pos.volume;
-        master.priceProd += (pos.price_open * pos.volume);
-        master.profit += pos.profit;
-        master.sub_positions.push(pos);
+    if (!grouped[key]) {
+      grouped[key] = {
+        ticket: key, // Master Ticket ID
+        symbol: pos.symbol,
+        type: pos.type,
+        volume: 0,
+        priceProd: 0,
+        profit: 0,
+        sub_positions: [],
+        // Aggregated Fields for labels
+        sl: pos.sl,
+        tp: pos.tp,
+        sl_consistent: true,
+        tp_consistent: true,
+      };
+      masterList.push(grouped[key]);
+    }
 
-        // Consistency Check (If child SL differs from Master SL)
-        if (Math.abs(master.sl - pos.sl) > 0.001) master.sl_consistent = false;
-        if (Math.abs(master.tp - pos.tp) > 0.001) master.tp_consistent = false;
-    });
+    const master = grouped[key];
 
-    // Finalize Master Fields
-    masterList.forEach(m => {
-        if (m.volume > 0) {
-            m.price_open = m.priceProd / m.volume;
-            // Use current price from first child (approx)
-            m.price_current = m.sub_positions[0].price_current; 
-        }
-        // If SL/TP inconsistent, set to 0 (or handle visually)
-        if (!m.sl_consistent) m.sl = 0; 
-        if (!m.tp_consistent) m.tp = 0;
-    });
+    // Aggregate Math
+    master.volume += pos.volume;
+    master.priceProd += pos.price_open * pos.volume;
+    master.profit += pos.profit;
+    master.sub_positions.push(pos);
 
-    return masterList;
+    // Consistency Check (If child SL differs from Master SL)
+    if (Math.abs(master.sl - pos.sl) > 0.001) master.sl_consistent = false;
+    if (Math.abs(master.tp - pos.tp) > 0.001) master.tp_consistent = false;
+  });
+
+  // Finalize Master Fields
+  masterList.forEach((m) => {
+    if (m.volume > 0) {
+      m.price_open = m.priceProd / m.volume;
+      // Use current price from first child (approx)
+      m.price_current = m.sub_positions[0].price_current;
+    }
+    // If SL/TP inconsistent, set to 0 (or handle visually)
+    if (!m.sl_consistent) m.sl = 0;
+    if (!m.tp_consistent) m.tp = 0;
+  });
+
+  return masterList;
 }
 
 // --- UPDATED SOCKET LISTENER ---
 function updateDashboardUI(data) {
-    if (!data) return;
-    
-    // 1. Group Raw Positions into Masters
-    const masterPositions = groupPositions(data.positions);
-    
-    // Store grouped positions in state so render functions work
-    window.SYSTEM_STATE = {
-        ...data,
-        positions: masterPositions // Replace flat list with grouped list
-    };
-    
-    if (!window.SYSTEM_STATE.orders) window.SYSTEM_STATE.orders = [];
-    
-    cleanupStepCache();
-
-    // Stats
-    const balEl = document.getElementById("val-balance"); if (balEl) balEl.innerText = `$${data.balance.toFixed(2)}`;
-    const eqEl = document.getElementById("val-equity"); if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
-    const plEl = document.getElementById("val-pl"); 
-    if (plEl) { 
-        plEl.innerText = `$${data.profit.toFixed(2)}`; 
-        plEl.className = data.profit >= 0 ? "stat-value text-green" : "stat-value text-red"; 
-    }
-    const powerEl = document.getElementById("val-power"); if (powerEl) powerEl.innerText = `$${data.margin_free.toFixed(2)}`;
-    
-    const usedMargin = data.balance - data.margin_free;
-    const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
-    const bar = document.querySelector(".progress-fill"); if (bar) bar.style.width = `${usagePct}%`;
-
-    // Render Tables using Grouped Data
-    renderPositions(window.SYSTEM_STATE.positions);
-    
-    // Chart Lines
-    if (specificTradeView) { 
-        refreshSpecificView(window.SYSTEM_STATE.positions); 
-    } else { 
-        updateChartPositions(window.SYSTEM_STATE.positions); 
-    }
-    renderPendingOrders(data.orders);
-}
-
-// --- UPDATED LIMIT LABELS (Fixes Bug 4 - P/L Calc) ---
-function renderLimitLabels(container) {
-    let totalVol = 0;
-    const accounts = window.allAccounts || []; 
-    const sym = window.currentSymbol || currentSymbol;
-    
-    // Calculate Volume based on Active Accounts + Config
-    if (accounts.length > 0 && sym) { 
-        const rawSym = sym.toUpperCase(); 
-        accounts.forEach(acc => { 
-            if (acc.IS_ACTIVE) {
-                let accVol = 0.01; // Default minimum
-                
-                // Check if account has specific config for this symbol
-                if (acc.SYMBOL_CONFIG) { 
-                    const configKey = Object.keys(acc.SYMBOL_CONFIG).find(k => { 
-                        const confSym = k.toUpperCase(); 
-                        return rawSym === confSym || rawSym.startsWith(confSym); 
-                    }); 
-                    if (configKey) { 
-                        const v = parseFloat(acc.SYMBOL_CONFIG[configKey].VOLUME); 
-                        if (!isNaN(v)) accVol = v; 
-                    }
-                }
-                totalVol += accVol;
-            } 
-        }); 
-    } 
-    
-    // Fallback if no accounts active (to avoid 0 division or weird display)
-    if (totalVol === 0) totalVol = 0.01;
-
-    const qtyInput = document.getElementById('trade-qty'); 
-    const inputMultiplier = qtyInput ? (parseFloat(qtyInput.value) || 1) : 1; 
-    const finalVol = totalVol * inputMultiplier;
-
-    const definitions = [ { type: 'ENTRY', price: limitOrderState.entryPrice, color: limitOrderState.type === 'BUY' ? COL_BUY : COL_SELL }, { type: 'TP', price: limitOrderState.tpPrice, color: COL_TP }, { type: 'SL', price: limitOrderState.slPrice, color: COL_SL } ];
-    definitions.forEach(def => {
-        const id = `limit-lbl-${def.type}`; let div = document.getElementById(id); const y = candleSeries.priceToCoordinate(def.price);
-        if (y === null) { if(div) div.remove(); return; }
-        const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" value="${def.price.toFixed(2)}" onmousedown="this.focus(); event.stopPropagation();" onclick="this.focus(); event.stopPropagation();" onkeyup="if(event.key === 'Enter') handleLimitInput('${def.type}', this.value)" onblur="handleLimitInput('${def.type}', this.value)" />`;
-        let contentHtml = "";
-        if (def.type === 'ENTRY') {
-             const isEdit = limitOrderState.isEdit; const isSubmitting = limitOrderState.isSubmitting; let btnText = isEdit ? "UPDATE" : "PLACE"; let btnAction = isEdit ? "submitOrderModification()" : "confirmLimitOrderFromLabel()"; let btnStyle = "";
-             if (isSubmitting) { btnText = "..."; btnAction = ""; btnStyle = "opacity:0.7; pointer-events:none;"; }
-             contentHtml = `<span style="margin-right:2px;">Entry</span> ${inputHtml} <button class="btn-label-place no-drag" style="${btnStyle}" onmousedown="event.stopPropagation(); ${btnAction}">${btnText}</button> <span class="no-drag" style="margin-left:8px; cursor:pointer; font-size:16px;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>`;
-        } else {
-             // Pass finalVol here for accurate P/L
-             const plVal = calculatePL(currentSymbol, limitOrderState.type, finalVol, limitOrderState.entryPrice, def.price); const plNum = parseFloat(plVal); const sign = plNum >= 0 ? "+" : ""; const plColor = "#ffffff"; 
-             contentHtml = `${def.type} ${inputHtml} (<span style="color:${plColor}">${sign}$${plVal}</span>)`;
-        }
-        if (!div) {
-            div = document.createElement("div"); div.id = id; div.className = "trade-label-tag limit-label"; div.style.position = "absolute"; div.style.left = "0px"; div.style.fontSize = "14px"; div.style.padding = "6px 12px"; div.style.display = "flex"; div.style.alignItems = "center"; div.style.fontWeight = "700"; div.style.cursor = "ns-resize"; div.style.zIndex = "61"; div.style.pointerEvents = "auto"; 
-            div.addEventListener('mouseenter', () => { div.style.zIndex = "1000"; }); div.addEventListener('mouseleave', () => { div.style.zIndex = "61"; });
-            div.onmousedown = (e) => { if (e.target.classList.contains('no-drag') || e.target.tagName === 'INPUT') { return; } e.preventDefault(); e.stopPropagation(); startDrag('LIMIT', def.type, def.price); };
-            container.appendChild(div);
-        }
-        const activeInput = document.activeElement; const isFocusedHere = activeInput && div.contains(activeInput) && activeInput.tagName === 'INPUT';
-        if (!isFocusedHere) { div.innerHTML = contentHtml; }
-        div.style.top = `${y}px`; div.style.backgroundColor = def.color; div.style.color = "white";
-        if(!div.innerHTML.trim()) div.innerHTML = contentHtml; 
-    });
-}
-
-function updateDashboardUI(data) {
   if (!data) return;
 
-  // GROUP POSITIONS HERE
+  // Group Positions
   const masterPositions = groupPositions(data.positions);
-
   window.SYSTEM_STATE = { ...data, positions: masterPositions };
   if (!window.SYSTEM_STATE.orders) window.SYSTEM_STATE.orders = [];
 
   cleanupStepCache();
 
-  // ... (Stats update code remains the same) ...
+  // --- 1. Update Main Dashboard Stats ---
   const balEl = document.getElementById("val-balance");
   if (balEl) balEl.innerText = `$${data.balance.toFixed(2)}`;
-  // ...
 
-  // RENDER WITH GROUPED POSITIONS
+  const eqEl = document.getElementById("val-equity");
+  if (eqEl) eqEl.innerText = `$${data.equity.toFixed(2)}`;
+
+  const plEl = document.getElementById("val-pl");
+  if (plEl) {
+    plEl.innerText = `$${data.profit.toFixed(2)}`;
+    // Color coding for P/L
+    plEl.className =
+      data.profit >= 0 ? "stat-value text-green" : "stat-value text-red";
+  }
+
+  const powerEl = document.getElementById("val-power");
+  if (powerEl) powerEl.innerText = `$${data.margin_free.toFixed(2)}`;
+
+  // Update Progress Bar
+  const usedMargin = data.balance - data.margin_free;
+  const usagePct = data.balance > 0 ? (usedMargin / data.balance) * 100 : 0;
+  const bar = document.querySelector(".progress-fill");
+  if (bar) bar.style.width = `${usagePct}%`;
+
+  // --- 2. Update Fullscreen Stats (Fix for Req #1) ---
+  const fsBal = document.getElementById("fs-val-bal");
+  if (fsBal) fsBal.innerText = `$${data.balance.toFixed(2)}`;
+
+  const fsEq = document.getElementById("fs-val-equity");
+  if (fsEq) fsEq.innerText = `$${data.equity.toFixed(2)}`;
+
+  const fsPl = document.getElementById("fs-val-pl");
+  if (fsPl) {
+    fsPl.innerText = `$${data.profit.toFixed(2)}`;
+    fsPl.className =
+      data.profit >= 0 ? "fs-value text-green" : "fs-value text-red";
+  }
+
+  const fsMar = document.getElementById("fs-val-margin");
+  if (fsMar) fsMar.innerText = `$${data.margin_free.toFixed(2)}`;
+
+  // --- 3. Update Watchlist Prices (Fix for Req #2) ---
+  if (data.prices) {
+    updateWatchlistPrices(data.prices);
+  }
+
+  // --- 4. Render Tables & Charts ---
+  renderPositions(window.SYSTEM_STATE.positions);
+
+  if (specificTradeView) {
+    refreshSpecificView(window.SYSTEM_STATE.positions);
+  } else {
+    updateChartPositions(window.SYSTEM_STATE.positions);
+  }
+  renderPendingOrders(data.orders);
+}
+
+// --- UPDATED LIMIT LABELS (Fixes Bug 4 - P/L Calc) ---
+function renderLimitLabels(container) {
+  let totalVol = 0;
+  const accounts = window.allAccounts || [];
+  const sym = window.currentSymbol || currentSymbol;
+
+  // Calculate Volume based on Active Accounts + Config
+  if (accounts.length > 0 && sym) {
+    const rawSym = sym.toUpperCase();
+    accounts.forEach((acc) => {
+      if (acc.IS_ACTIVE) {
+        let accVol = 0.01; // Default minimum
+
+        // Check if account has specific config for this symbol
+        if (acc.SYMBOL_CONFIG) {
+          const configKey = Object.keys(acc.SYMBOL_CONFIG).find((k) => {
+            const confSym = k.toUpperCase();
+            return rawSym === confSym || rawSym.startsWith(confSym);
+          });
+          if (configKey) {
+            const v = parseFloat(acc.SYMBOL_CONFIG[configKey].VOLUME);
+            if (!isNaN(v)) accVol = v;
+          }
+        }
+        totalVol += accVol;
+      }
+    });
+  }
+
+  // Fallback if no accounts active (to avoid 0 division or weird display)
+  if (totalVol === 0) totalVol = 0.01;
+
+  const qtyInput = document.getElementById("trade-qty");
+  const inputMultiplier = qtyInput ? parseFloat(qtyInput.value) || 1 : 1;
+  const finalVol = totalVol * inputMultiplier;
+
+  const definitions = [
+    {
+      type: "ENTRY",
+      price: limitOrderState.entryPrice,
+      color: limitOrderState.type === "BUY" ? COL_BUY : COL_SELL,
+    },
+    { type: "TP", price: limitOrderState.tpPrice, color: COL_TP },
+    { type: "SL", price: limitOrderState.slPrice, color: COL_SL },
+  ];
+  definitions.forEach((def) => {
+    const id = `limit-lbl-${def.type}`;
+    let div = document.getElementById(id);
+    const y = candleSeries.priceToCoordinate(def.price);
+    if (y === null) {
+      if (div) div.remove();
+      return;
+    }
+    const inputHtml = `<input type="number" step="0.01" class="limit-price-input no-drag" value="${def.price.toFixed(2)}" onmousedown="this.focus(); event.stopPropagation();" onclick="this.focus(); event.stopPropagation();" onkeyup="if(event.key === 'Enter') handleLimitInput('${def.type}', this.value)" onblur="handleLimitInput('${def.type}', this.value)" />`;
+    let contentHtml = "";
+    if (def.type === "ENTRY") {
+      const isEdit = limitOrderState.isEdit;
+      const isSubmitting = limitOrderState.isSubmitting;
+      let btnText = isEdit ? "UPDATE" : "PLACE";
+      let btnAction = isEdit
+        ? "submitOrderModification()"
+        : "confirmLimitOrderFromLabel()";
+      let btnStyle = "";
+      if (isSubmitting) {
+        btnText = "...";
+        btnAction = "";
+        btnStyle = "opacity:0.7; pointer-events:none;";
+      }
+      contentHtml = `<span style="margin-right:2px;">Entry</span> ${inputHtml} <button class="btn-label-place no-drag" style="${btnStyle}" onmousedown="event.stopPropagation(); ${btnAction}">${btnText}</button> <span class="no-drag" style="margin-left:8px; cursor:pointer; font-size:16px;" onmousedown="event.stopPropagation(); cancelLimitMode()">×</span>`;
+    } else {
+      // Pass finalVol here for accurate P/L
+      const plVal = calculatePL(
+        currentSymbol,
+        limitOrderState.type,
+        finalVol,
+        limitOrderState.entryPrice,
+        def.price,
+      );
+      const plNum = parseFloat(plVal);
+      const sign = plNum >= 0 ? "+" : "";
+      const plColor = "#ffffff";
+      contentHtml = `${def.type} ${inputHtml} (<span style="color:${plColor}">${sign}$${plVal}</span>)`;
+    }
+    if (!div) {
+      div = document.createElement("div");
+      div.id = id;
+      div.className = "trade-label-tag limit-label";
+      div.style.position = "absolute";
+      div.style.left = "0px";
+      div.style.fontSize = "14px";
+      div.style.padding = "6px 12px";
+      div.style.display = "flex";
+      div.style.alignItems = "center";
+      div.style.fontWeight = "700";
+      div.style.cursor = "ns-resize";
+      div.style.zIndex = "61";
+      div.style.pointerEvents = "auto";
+      div.addEventListener("mouseenter", () => {
+        div.style.zIndex = "1000";
+      });
+      div.addEventListener("mouseleave", () => {
+        div.style.zIndex = "61";
+      });
+      div.onmousedown = (e) => {
+        if (
+          e.target.classList.contains("no-drag") ||
+          e.target.tagName === "INPUT"
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        startDrag("LIMIT", def.type, def.price);
+      };
+      container.appendChild(div);
+    }
+    const activeInput = document.activeElement;
+    const isFocusedHere =
+      activeInput &&
+      div.contains(activeInput) &&
+      activeInput.tagName === "INPUT";
+    if (!isFocusedHere) {
+      div.innerHTML = contentHtml;
+    }
+    div.style.top = `${y}px`;
+    div.style.backgroundColor = def.color;
+    div.style.color = "white";
+    if (!div.innerHTML.trim()) div.innerHTML = contentHtml;
+  });
+}
+
+function updateDashboardUI(data) {
+  if (!data) return;
+
+  // Group Positions
+  const masterPositions = groupPositions(data.positions);
+  window.SYSTEM_STATE = { ...data, positions: masterPositions };
+  if (!window.SYSTEM_STATE.orders) window.SYSTEM_STATE.orders = [];
+
+  cleanupStepCache();
+
+  // 1. Update Main Dashboard Stats
+  try {
+    const balEl = document.getElementById("val-balance");
+    if (balEl) balEl.innerText = `$${(data.balance || 0).toFixed(2)}`;
+
+    const eqEl = document.getElementById("val-equity");
+    if (eqEl) eqEl.innerText = `$${(data.equity || 0).toFixed(2)}`;
+
+    const plEl = document.getElementById("val-pl");
+    if (plEl) {
+      const prof = data.profit || 0;
+      plEl.innerText = `$${prof.toFixed(2)}`;
+      plEl.className =
+        prof >= 0 ? "stat-value text-green" : "stat-value text-red";
+    }
+
+    const powerEl = document.getElementById("val-power");
+    if (powerEl) powerEl.innerText = `$${(data.margin_free || 0).toFixed(2)}`;
+
+    const usedMargin = (data.balance || 0) - (data.margin_free || 0);
+    const usagePct =
+      (data.balance || 0) > 0 ? (usedMargin / data.balance) * 100 : 0;
+    const bar = document.querySelector(".progress-fill");
+    if (bar) bar.style.width = `${usagePct}%`;
+
+    // 2. Update Fullscreen Stats
+    const fsBal = document.getElementById("fs-val-bal");
+    if (fsBal) fsBal.innerText = `$${(data.balance || 0).toFixed(2)}`;
+
+    const fsEq = document.getElementById("fs-val-equity");
+    if (fsEq) fsEq.innerText = `$${(data.equity || 0).toFixed(2)}`;
+
+    const fsPl = document.getElementById("fs-val-pl");
+    if (fsPl) {
+      const prof = data.profit || 0;
+      fsPl.innerText = `$${prof.toFixed(2)}`;
+      fsPl.className = prof >= 0 ? "fs-value text-green" : "fs-value text-red";
+    }
+
+    const fsMar = document.getElementById("fs-val-margin");
+    if (fsMar) fsMar.innerText = `$${(data.margin_free || 0).toFixed(2)}`;
+  } catch (e) {
+    console.error("Error updating stats:", e);
+  }
+
+  // 3. Update Watchlist Prices
+  if (data.prices) {
+    updateWatchlistPrices(data.prices);
+  }
+
+  // 4. Render Tables & Charts
   renderPositions(window.SYSTEM_STATE.positions);
 
   if (specificTradeView) {
@@ -413,6 +564,11 @@ async function updateLiveCandle() {
       latestCandle = latest;
       if (!lastHoveredTime || lastHoveredTime === latest.time) {
         updateLegend(latest);
+      }
+      if (latestCandle) {
+        lastKnownPrice = latestCandle.close;
+        // Trigger immediate update so line doesn't lag
+        updateCountdownOnPriceLine(); 
       }
       updateLeftLabels();
     }
@@ -649,13 +805,28 @@ function toggleSidebar() {
   }, 310);
 }
 function toggleHeader() {
+  // Fix for Req #4: Toggle fullscreen stats visibility too
   const col = document.getElementById("stats-column");
-  if (!col) return;
-  if (col.classList.contains("hidden")) {
-    col.classList.remove("hidden");
-  } else {
-    col.classList.add("hidden");
+  const fsStats = document.getElementById("fs-stats");
+
+  let isHidden = false;
+
+  if (col) {
+    if (col.classList.contains("hidden")) {
+      col.classList.remove("hidden");
+    } else {
+      col.classList.add("hidden");
+      isHidden = true;
+    }
   }
+
+  // Toggle the fullscreen stats container
+  if (fsStats) {
+    // If hidden is true, we hide fsStats. If hidden is false, we allow it to follow CSS rules (flex)
+    // We use !important to override the .fullscreen-mode display:flex rule when hidden
+    fsStats.style.cssText = isHidden ? "display: none !important" : "";
+  }
+
   triggerResize();
 }
 function triggerResize() {
@@ -694,16 +865,31 @@ function refreshSpecificView(allPositions) {
   }
 }
 // --- FIX: Horizontal SL/TP Layout ---
-function renderSlTpCell(targetPrice, type, ticket, symbol, entryPrice, volume, direction) {
-  if (!targetPrice || targetPrice <= 0) return '<span style="color:#555">-</span>';
-  
+function renderSlTpCell(
+  targetPrice,
+  type,
+  ticket,
+  symbol,
+  entryPrice,
+  volume,
+  direction,
+) {
+  if (!targetPrice || targetPrice <= 0)
+    return '<span style="color:#555">-</span>';
+
   const safeEntry = parseFloat(entryPrice) || 0;
-  const plValue = calculatePL(symbol, direction, volume, safeEntry, targetPrice);
+  const plValue = calculatePL(
+    symbol,
+    direction,
+    volume,
+    safeEntry,
+    targetPrice,
+  );
   const plClass = parseFloat(plValue) >= 0 ? "text-green" : "text-red";
   const plSign = parseFloat(plValue) >= 0 ? "+" : "";
   const color = type === "sl" ? "#ff9f43" : "#00b894";
 
-  // New Structure: 
+  // New Structure:
   // [ Price ]   [ x ]
   // [ (PnL) ]
   return `
@@ -1080,10 +1266,13 @@ function renderSingleLabel(container, ticket, type, price, data) {
   const id = `lbl-${ticket}-${type}`;
   let div = document.getElementById(id);
   const y = candleSeries.priceToCoordinate(price);
+  
   if (y === null) {
     if (div) div.style.display = "none";
     return;
   }
+
+  // --- Logic for P/L Colors & Text (Identical to your snippet) ---
   let plText = "";
   let plColor = "#ffffff";
   let sign = "";
@@ -1104,11 +1293,14 @@ function renderSingleLabel(container, ticket, type, price, data) {
     plColor = parseFloat(plVal) >= 0 ? "#00b894" : "#ff5555";
     sign = parseFloat(plVal) >= 0 ? "+" : "";
   }
+
   const finalPlColor = type === "MAIN" ? plColor : "#ffffff";
   const typeColor = data.type === "BUY" ? "#2962ff" : "#ff5555";
   const bg = type === "MAIN" ? "#ffffff" : type === "TP" ? COL_TP : COL_SL;
   const fg = type === "MAIN" ? typeColor : "#ffffff";
   const border = type === "MAIN" ? `2px solid ${typeColor}` : "none";
+
+  // --- Div Creation (Identical to your snippet) ---
   if (!div) {
     div = document.createElement("div");
     div.id = id;
@@ -1122,12 +1314,11 @@ function renderSingleLabel(container, ticket, type, price, data) {
     div.style.gap = "8px";
     div.style.zIndex = "60";
     div.style.cursor = type === "MAIN" ? "default" : "ns-resize";
-    div.addEventListener("mouseenter", () => {
-      div.style.zIndex = "1000";
-    });
-    div.addEventListener("mouseleave", () => {
-      div.style.zIndex = "60";
-    });
+    
+    // Z-Index Logic
+    div.addEventListener("mouseenter", () => { div.style.zIndex = "1000"; });
+    div.addEventListener("mouseleave", () => { div.style.zIndex = "60"; });
+
     if (type === "MAIN") {
       div.onmouseenter = () => {
         div.style.zIndex = "1000";
@@ -1147,13 +1338,14 @@ function renderSingleLabel(container, ticket, type, price, data) {
           e.target.tagName === "INPUT" ||
           e.target.closest(".sl-modifier-group") ||
           e.target.classList.contains("label-close")
-        )
-          return;
+        ) return;
         e.preventDefault();
         e.stopPropagation();
         startDrag(ticket, type, price);
       };
     }
+
+    // --- HTML GENERATION (UPDATED PART) ---
     let innerHTML = "";
     if (type === "MAIN") {
       let coreText = `${data.type} ${data.volume} @ ${data.price_open.toFixed(2)}`;
@@ -1162,7 +1354,9 @@ function renderSingleLabel(container, ticket, type, price, data) {
     } else {
       innerHTML += `<span style="font-weight:700; margin-right:4px;">${type}</span> <input type="number" step="0.01" class="limit-price-input no-drag" data-field="price" value="${price.toFixed(2)}" onmousedown="event.stopPropagation()" onkeydown="if(event.key === 'Enter') handlePositionInput('${ticket}', '${type}', this.value)" onblur="handlePositionInput('${ticket}', '${type}', this.value)" />`;
     }
-    if (type === "SL" && !limitOrderState.active) {
+
+    // [FIX] Apply to BOTH SL and TP now
+    if (type !== "MAIN" && !limitOrderState.active) {
       let stepVal = 0.5;
       if (typeof stepValuesCache !== "undefined" && stepValuesCache[ticket]) {
         stepVal = stepValuesCache[ticket];
@@ -1173,11 +1367,22 @@ function renderSingleLabel(container, ticket, type, price, data) {
       ) {
         stepVal = SYMBOL_MAP[data.symbol].trail || 0.5;
       }
-      innerHTML += ` <div class="sl-modifier-group no-drag" onmousedown="event.stopPropagation()"> <div class="arrow-btn" onclick="moveSlByStep('${ticket}', 'UP')">▲</div> <div class="arrow-btn" onclick="moveSlByStep('${ticket}', 'DOWN')">▼</div> <input type="number" class="step-input" value="${stepVal}" onmousedown="event.stopPropagation()" onclick="this.focus()" oninput="updateStepCache('${ticket}', this.value)" placeholder="Step"> </div>`;
+      
+      // [FIX] Layout: Arrow Left - Input - Arrow Right
+      innerHTML += ` 
+      <div class="sl-modifier-group no-drag" onmousedown="event.stopPropagation()"> 
+        <div class="arrow-btn" onclick="adjustLevelByStep('${ticket}', '${type}', -1)">-</div> 
+        <input type="number" class="step-input" value="${stepVal}" onmousedown="event.stopPropagation()" onclick="this.focus()" oninput="updateStepCache('${ticket}', this.value)" placeholder="Step"> 
+        <div class="arrow-btn" onclick="adjustLevelByStep('${ticket}', '${type}', 1)">+</div>
+      </div>`;
     }
+
     innerHTML += `<span class="label-pl" style="font-weight:700; margin-left:4px; color:${finalPlColor}">(${sign}$${plText})</span>`;
     innerHTML += `<span class="label-close" style="margin-left:10px; cursor:pointer; font-weight:bold; fontSize:24px; line-height:1;">×</span>`;
+    
     div.innerHTML = innerHTML;
+    
+    // Close Button Logic (Identical to snippet)
     const closeBtn = div.querySelector(".label-close");
     closeBtn.onmousedown = (e) => e.stopPropagation();
     closeBtn.onclick = async (e) => {
@@ -1185,8 +1390,7 @@ function renderSingleLabel(container, ticket, type, price, data) {
       e.preventDefault();
       closeBtn.innerHTML = "";
       closeBtn.className = "loader-spinner-small";
-      closeBtn.style.border =
-        type === "MAIN" ? `2px solid ${typeColor}` : "2px solid white";
+      closeBtn.style.border = type === "MAIN" ? `2px solid ${typeColor}` : "2px solid white";
       closeBtn.style.borderRight = "2px solid transparent";
       try {
         if (type === "MAIN") await closeTrade(ticket);
@@ -1201,10 +1405,13 @@ function renderSingleLabel(container, ticket, type, price, data) {
   } else {
     div.style.display = "flex";
   }
+
+  // --- Dynamic Updates (Identical to snippet) ---
   div.style.top = `${y}px`;
   div.style.backgroundColor = bg;
   div.style.color = fg;
   div.style.border = border;
+  
   const closeBtn = div.querySelector(".label-close");
   if (closeBtn && !closeBtn.classList.contains("loader-spinner-small")) {
     closeBtn.style.color = type === "MAIN" ? typeColor : "white";
@@ -1262,46 +1469,36 @@ async function handlePositionInput(ticketId, type, priceStr) {
     showError("Modification Failed", err.message);
   }
 }
-async function moveSlByStep(ticket, direction) {
-  const group = priceLines[ticket];
-  if (!group || !group.data) return;
-  const currentSl = group.data.sl;
-  if (!currentSl) return;
-  const step = getStepValueForTicket(ticket);
-  let newSl = direction === "UP" ? currentSl + step : currentSl - step;
-  newSl = Math.round(newSl * 100) / 100;
-  const currentPrice = group.data.price_current;
-  const tradeType = group.data.type;
-  if (tradeType === "BUY") {
-    if (newSl >= currentPrice) return;
-  } else {
-    if (newSl <= currentPrice) return;
-  }
-  let targets = [];
-  if (group.data.tickets) {
-    targets = group.data.tickets;
-  } else {
-    targets = [ticket];
-  }
-  const promises = targets.map((t) => {
-    const payload = {
-      ticket: t,
-      user_id: currentUserId,
-      symbol: currentSymbol,
-      sl: newSl,
-    };
-    return fetch("http://127.0.0.1:5000/api/modify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  });
-  try {
-    await Promise.all(promises);
-  } catch (err) {
-    showError("Modification Failed", err.message);
-  }
+
+function adjustLevelByStep(ticket, type, direction) {
+    const id = `lbl-${ticket}-${type}`;
+    const div = document.getElementById(id);
+    if (!div) return;
+
+    // 1. Get Price Input
+    const priceInput = div.querySelector('input[data-field="price"]');
+    if (!priceInput) return;
+    let currentPrice = parseFloat(priceInput.value);
+
+    // 2. Get Step Value
+    const stepInput = div.querySelector('.step-input');
+    let step = 0.5; // Default
+    if (stepInput && stepInput.value) {
+        step = parseFloat(stepInput.value);
+    }
+
+    // 3. Calculate
+    let newPrice = currentPrice + (step * direction);
+    newPrice = parseFloat(newPrice.toFixed(2));
+
+    // 4. Update UI & Submit
+    priceInput.value = newPrice;
+    handlePositionInput(ticket, type, newPrice);
 }
+function moveSlByStep(ticket, step) {
+    adjustLevelByStep(ticket, 'SL', step > 0 ? 1 : -1);
+}
+
 function showHoverMenuFixed(ticket, type, y, labelElem) {
   const menu = document.getElementById("hover-menu");
   if (!priceLines[ticket]) return;
@@ -1459,14 +1656,16 @@ function cancelLimitMode() {
   updateLeftLabels();
 }
 function drawLimitLines() {
+  // Fix for Req #3: Removed 'title' property to hide text labels
   const entryColor = limitOrderState.type === "BUY" ? COL_BUY : COL_SELL;
+
   limitOrderState.lines.entry = candleSeries.createPriceLine({
     price: limitOrderState.entryPrice,
     color: entryColor,
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Solid,
     axisLabelVisible: true,
-    title: "LIMIT ENTRY",
+    title: "", // Hidden
   });
   limitOrderState.lines.tp = candleSeries.createPriceLine({
     price: limitOrderState.tpPrice,
@@ -1474,7 +1673,7 @@ function drawLimitLines() {
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Solid,
     axisLabelVisible: true,
-    title: "LIMIT TP",
+    title: "", // Hidden
   });
   limitOrderState.lines.sl = candleSeries.createPriceLine({
     price: limitOrderState.slPrice,
@@ -1482,7 +1681,7 @@ function drawLimitLines() {
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Solid,
     axisLabelVisible: true,
-    title: "LIMIT SL",
+    title: "", // Hidden
   });
 }
 function setExistingLinesStyle(style) {
@@ -2162,45 +2361,28 @@ async function closeTrade(ticket, btnElem) {
     if (btnElem) btnElem.classList.remove("btn-loading");
   }
 }
-function submitOrderModification() {
-  const tickets = limitOrderState.editTickets || [limitOrderState.editTicket];
-  limitOrderState.isSubmitting = true;
-  updateLeftLabels();
-  Promise.all(
-    tickets.map((ticket) => {
-      const payload = {
-        user_id: currentUserId,
+function submitOrderModification(ticket, type, value) {
+    const val = parseFloat(value);
+    if (isNaN(val)) return;
+
+    // Optimistic UI Update (optional, but makes it snappy)
+    // We wait for socket update for real change
+    
+    const payload = {
         ticket: ticket,
-        price: limitOrderState.entryPrice,
-        tp: limitOrderState.tpPrice,
-        sl: limitOrderState.slPrice,
-      };
-      return fetch("http://127.0.0.1:5000/api/order/modify", {
+        sl: type === 'SL' ? val : null,
+        tp: type === 'TP' ? val : null
+    };
+    
+    // Send to backend
+    fetch("http://127.0.0.1:5000/api/modify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).then((res) => res.json());
-    }),
-  )
-    .then((results) => {
-      const anySuccess = results.some((r) => r.success);
-      if (anySuccess) {
-        cancelLimitMode();
-      } else {
-        const firstError = results.find((r) => !r.success);
-        showError(
-          "Modification Failed",
-          firstError ? firstError.message : "Unknown error",
-        );
-        limitOrderState.isSubmitting = false;
-        updateLeftLabels();
-      }
-    })
-    .catch((e) => {
-      showError("Error", e.message);
-      limitOrderState.isSubmitting = false;
-      updateLeftLabels();
-    });
+        body: JSON.stringify(payload)
+    }).then(res => res.json())
+      .then(d => {
+          if (d.error) showError("Modify Failed", d.error);
+      });
 }
 async function cancelPendingOrder(tickets) {
   try {

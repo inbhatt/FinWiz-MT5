@@ -45,7 +45,8 @@ def get_resource_path(filename):
 
 
 # --- WORKER PROCESS ---
-def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, trade_results):
+def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, trade_results, global_symbols):
+    # Re-configure logging for this process
     logging.basicConfig(filename='debug.log', level=logging.INFO, format='[WORKER] %(asctime)s: %(message)s')
 
     acc_id = str(account_data.get('ID', 'UNKNOWN'))
@@ -57,24 +58,39 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
         server = account_data['SERVER']
         path = account_data.get('TERMINAL_PATH', '').strip()
 
-        # Init MT5 ... (Same as before)
+        # Init MT5
+        initialized = False
         if path and os.path.exists(path):
-            if not mt5.initialize(path=path, login=login, password=password, server=server):
-                shared_dict[acc_id] = {'status': 'ERROR', 'error': str(mt5.last_error())}
-                return
+            initialized = mt5.initialize(path=path, login=login, password=password, server=server)
         else:
-            if not mt5.initialize(login=login, password=password, server=server):
-                shared_dict[acc_id] = {'status': 'ERROR', 'error': str(mt5.last_error())}
-                return
+            initialized = mt5.initialize(login=login, password=password, server=server)
 
-        # Determine symbols to watch (Configured symbols + XAUUSD)
+        if not initialized:
+            err = mt5.last_error()
+            shared_dict[acc_id] = {'status': 'ERROR', 'error': str(err)}
+            logging.error(f"[{acc_name}] MT5 Init Failed: {err}")
+            return
+
+        # --- FIX: Watch ALL Symbols (Configured + Global Watchlist) ---
         watched_symbols = set(['XAUUSD'])
+
+        # 1. Add symbols from Account Config
         if 'SYMBOL_CONFIG' in account_data:
             for s in account_data['SYMBOL_CONFIG']:
                 watched_symbols.add(s)
 
+        # 2. Add symbols from Global Database List (passed in args)
+        for s in global_symbols:
+            watched_symbols.add(s)
+
+        # 3. Select them in MT5
+        for s in watched_symbols:
+            mt5.symbol_select(s, True)
+
+        logging.info(f"[{acc_name}] Worker Started. Watching {len(watched_symbols)} symbols.")
+
         while True:
-            # --- (Command Processing Block remains the same) ---
+            # --- COMMAND PROCESSING ---
             while not cmd_queue.empty():
                 cmd = cmd_queue.get()
                 action = cmd.get('action')
@@ -98,14 +114,15 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
                                      "low": float(r['low']), "close": float(r['close'])})
                         if req_id: response_dict[req_id] = result
 
-                    # ... (Keep TRADE, MODIFY, CLOSE blocks exactly as they were) ...
                     elif action == 'TRADE':
-                        req = cmd['payload'];
-                        symbol = req['symbol'];
+                        req = cmd['payload']
+                        symbol = req['symbol']
                         if not mt5.symbol_select(symbol, True):
                             if req_id: trade_results[f"{req_id}_{acc_id}"] = f"{acc_name}: Symbol Error"
                             continue
-                        filling_mode = mt5.ORDER_FILLING_RETURN;
+
+                        # Filling Mode Logic
+                        filling_mode = mt5.ORDER_FILLING_RETURN
                         s_info = mt5.symbol_info(symbol)
                         if s_info:
                             if s_info.filling_mode & 1:
@@ -113,6 +130,8 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
                             elif s_info.filling_mode & 2:
                                 filling_mode = mt5.ORDER_FILLING_IOC
                         req["type_filling"] = filling_mode
+
+                        # Price Logic
                         if req['action'] == mt5.TRADE_ACTION_DEAL:
                             tick = mt5.symbol_info_tick(symbol)
                             if tick:
@@ -123,12 +142,13 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
                             else:
                                 if req_id: trade_results[f"{req_id}_{acc_id}"] = f"{acc_name}: No Price"
                                 continue
+
                         res = mt5.order_send(req)
                         msg = f"{acc_name}: Success" if res and res.retcode == mt5.TRADE_RETCODE_DONE else f"{acc_name}: Error {res.comment if res else 'None'}"
                         if req_id: trade_results[f"{req_id}_{acc_id}"] = msg
 
                     elif action == 'MODIFY':
-                        req = cmd['payload'];
+                        req = cmd['payload']
                         ticket = int(req['position'])
                         positions = mt5.positions_get(ticket=ticket)
                         if positions:
@@ -140,34 +160,37 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
                             mt5.order_send(mod_req)
 
                     elif action == 'ORDER_MODIFY':
-                        req = cmd['payload'];
-                        req["action"] = mt5.TRADE_ACTION_MODIFY;
+                        req = cmd['payload']
+                        req["action"] = mt5.TRADE_ACTION_MODIFY
                         mt5.order_send(req)
 
                     elif action == 'ORDER_CANCEL':
-                        req = cmd['payload'];
-                        req["action"] = mt5.TRADE_ACTION_REMOVE;
+                        req = cmd['payload']
+                        req["action"] = mt5.TRADE_ACTION_REMOVE
                         mt5.order_send(req)
 
                     elif action == 'CLOSE':
-                        ticket = int(cmd['payload']['position']);
+                        ticket = int(cmd['payload']['position'])
                         positions = mt5.positions_get(ticket=ticket)
                         if positions:
-                            pos = positions[0];
-                            mt5.symbol_select(pos.symbol, True);
+                            pos = positions[0]
+                            mt5.symbol_select(pos.symbol, True)
                             tick = mt5.symbol_info_tick(pos.symbol)
                             close_price = tick.bid if pos.type == 0 else tick.ask
-                            f_mode = mt5.ORDER_FILLING_RETURN;
+
+                            f_mode = mt5.ORDER_FILLING_RETURN
                             s_info = mt5.symbol_info(pos.symbol)
                             if s_info:
                                 if s_info.filling_mode & 1:
                                     f_mode = mt5.ORDER_FILLING_FOK
                                 elif s_info.filling_mode & 2:
                                     f_mode = mt5.ORDER_FILLING_IOC
+
                             close_req = {"action": mt5.TRADE_ACTION_DEAL, "position": ticket, "symbol": pos.symbol,
                                          "volume": pos.volume, "type": 1 if pos.type == 0 else 0, "price": close_price,
                                          "deviation": 20, "type_filling": f_mode}
                             mt5.order_send(close_req)
+
                 except Exception as e:
                     logging.error(f"[{acc_name}] Cmd Error: {e}")
 
@@ -200,19 +223,22 @@ def account_worker_loop(account_data, cmd_queue, shared_dict, response_dict, tra
                             "price_open": o.price_open, "sl": o.sl, "tp": o.tp, "account": acc_name
                         })
 
-                # 3. NEW: Fetch Watchlist Prices
+                # 3. Fetch Prices for ALL Watched Symbols
                 price_map = {}
                 for sym in watched_symbols:
-                    if mt5.symbol_select(sym, True):
-                        tick = mt5.symbol_info_tick(sym)
-                        if tick:
-                            price_map[sym] = {'bid': tick.bid, 'ask': tick.ask}
+                    tick = mt5.symbol_info_tick(sym)
+                    if tick:
+                        price_map[sym] = {'bid': tick.bid, 'ask': tick.ask}
 
+                # Update Shared State
                 shared_dict[acc_id] = {
                     'ID': acc_id, 'balance': acc_info.balance, 'equity': acc_info.equity,
                     'margin_free': acc_info.margin_free, 'positions': pos_list,
                     'orders': ord_list, 'prices': price_map, 'status': 'ONLINE'
                 }
+            else:
+                # Lost connection to account
+                shared_dict[acc_id] = {'status': 'CONNECTING', 'error': 'Account Info Null'}
 
             time.sleep(0.05)
 
@@ -227,13 +253,23 @@ def start_worker_for_account(acc_data):
     if acc_id in WORKER_PROCESSES: return
 
     logging.info(f"Spawning Worker for {acc_id}")
-
-    # STORE CONFIG FOR TRADING LOGIC
     ACCOUNT_CONFIGS[acc_id] = acc_data.get('SYMBOL_CONFIG', {})
+
+    # --- FETCH GLOBAL SYMBOLS ---
+    # This ensures the worker watches all symbols in the dashboard watchlist
+    global_symbols = []
+    try:
+        db = get_db()
+        docs = db.collection('SYMBOLS').stream()
+        global_symbols = [doc.id for doc in docs]
+    except Exception as e:
+        logging.error(f"Failed to fetch global symbols: {e}")
+        global_symbols = ['XAUUSD'] # Fallback
 
     q = Queue()
     COMMAND_QUEUES[acc_id] = q
-    p = Process(target=account_worker_loop, args=(acc_data, q, SHARED_DATA, RESPONSE_DICT, TRADE_RESULTS))
+    # Pass global_symbols to worker
+    p = Process(target=account_worker_loop, args=(acc_data, q, SHARED_DATA, RESPONSE_DICT, TRADE_RESULTS, global_symbols))
     p.daemon = True
     p.start()
     WORKER_PROCESSES[acc_id] = p
@@ -258,19 +294,22 @@ def stop_worker_for_account(acc_id):
 def broadcast_loop():
     while True:
         try:
-            total_bal = 0;
-            total_eq = 0;
-            total_margin_free = 0
-            all_positions = [];
-            all_orders = [];
+            total_bal = 0.0
+            total_eq = 0.0
+            total_margin_free = 0.0
+            all_positions = []
+            all_orders = []
             combined_prices = {}
 
             data_snapshot = SHARED_DATA.copy()
+            active_count = 0
+
             for acc_id, data in data_snapshot.items():
                 if data.get('status') == 'ONLINE':
-                    total_bal += data.get('balance', 0)
-                    total_eq += data.get('equity', 0)
-                    total_margin_free += data.get('margin_free', 0)
+                    active_count += 1
+                    total_bal += float(data.get('balance', 0))
+                    total_eq += float(data.get('equity', 0))
+                    total_margin_free += float(data.get('margin_free', 0))
                     all_positions.extend(data.get('positions', []))
                     all_orders.extend(data.get('orders', []))
 
@@ -281,7 +320,7 @@ def broadcast_loop():
             payload = {
                 'balance': total_bal, 'equity': total_eq, 'margin_free': total_margin_free,
                 'profit': total_eq - total_bal, 'positions': all_positions, 'orders': all_orders,
-                'prices': combined_prices  # Send to frontend
+                'prices': combined_prices, 'active_accounts': active_count
             }
             socketio.emit('dashboard_update', payload)
             socketio.sleep(0.25)

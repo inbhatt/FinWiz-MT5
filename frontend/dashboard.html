@@ -136,25 +136,36 @@
                     <span class="fs-label">EQ</span>
                     <span id="fs-val-equity" class="fs-value">--</span>
                   </div>
+                  <div class="fs-stat-item">
+                    <span class="fs-label">P/L</span>
+                    <span id="fs-val-pl" class="fs-value">--</span>
+                  </div>
+                  <div class="fs-stat-item">
+                    <span class="fs-label">FREE</span>
+                    <span id="fs-val-margin" class="fs-value">--</span>
+                  </div>
                   <div class="fs-divider"></div>
                 </div>
-                <button class="btn-sell" onclick="placeOrder('SELL')">
-                  SELL
-                </button>
 
-                <div class="qty-control">
-                  <button onclick="adjustQty(-1)">−</button>
-                  <input
-                    type="number"
-                    id="trade-qty"
-                    value="1"
-                    min="1"
-                    step="1"
-                  />
-                  <button onclick="adjustQty(1)">+</button>
+                <div class="trade-controls-right">
+                  <button class="btn-sell" onclick="placeOrder('SELL')">
+                    SELL
+                  </button>
+                  <div class="qty-control">
+                    <button onclick="adjustQty(-1)">−</button>
+                    <input
+                      type="number"
+                      id="trade-qty"
+                      value="1"
+                      min="1"
+                      step="1"
+                    />
+                    <button onclick="adjustQty(1)">+</button>
+                  </div>
+                  <button class="btn-buy" onclick="placeOrder('BUY')">
+                    BUY
+                  </button>
                 </div>
-
-                <button class="btn-buy" onclick="placeOrder('BUY')">BUY</button>
               </div>
             </div>
           </div>

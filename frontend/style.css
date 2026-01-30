@@ -446,9 +446,10 @@ button#loginBtn:active {
   margin-bottom: 4px;
 }
 .wl-symbol {
-  font-weight: 700;
-  font-size: 14px;
+  font-weight: 800;
+  font-size: 18px; /* Increased from 14px */
   color: #fff;
+  letter-spacing: 0.5px;
 }
 .wl-price {
   font-weight: 700;
@@ -562,17 +563,33 @@ button#loginBtn:active {
   position: relative; /* Needed for absolute centering */
 }
 .chart-header h2 {
-  font-size: 24px;
+  font-size: 35px; /* Increased from 24px */
   font-weight: 800;
   margin: 0;
   letter-spacing: -0.5px;
-
-  /* Absolute Center */
+  
+  /* Keep Absolute Center */
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
-  pointer-events: none; /* Let clicks pass through to chart if needed */
+  pointer-events: none;
+  
+  /* Flex to align the countdown next to it if needed, 
+     but simpler to keep absolute and put countdown nearby */
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.bar-countdown {
+  font-family: "Inter", monospace;
+  font-size: 16px;
+  color: #36d7b7; /* Cyan accent */
+  font-weight: 600;
+  background: rgba(54, 215, 183, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
 }
 
 .chart-controls button {
@@ -598,22 +615,28 @@ button#loginBtn:active {
 
 /* Trading Panel (Floating) */
 .trading-panel {
-  /* Remove position: absolute, top, left, transform */
   position: relative;
   z-index: 40;
 
   display: flex;
-  justify-content: center; /* Center horizontally */
+  justify-content: space-between; /* Ensures space between Stats (left) and Controls (right) */
   align-items: center;
-  gap: 12px; /* Increased gap slightly */
+  /* gap: 12px; REMOVED (Moved to wrapper) */
 
-  background: var(--glass-bg); /* Keep glass look */
+  background: var(--glass-bg);
   padding: 10px 20px;
-  margin-top: 10px; /* Space between chart and buttons */
+  margin-top: 10px;
   border-radius: 12px;
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(10px);
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+.trade-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto; /* This forces the group to the far right */
 }
 
 .trading-panel button,
@@ -1924,13 +1947,13 @@ select.styled-input {
 
 /* 1. Make the panel wider in fullscreen to accommodate stats on the left */
 .chart-col.fullscreen-mode .trading-panel {
-  width: 100%; /* Span most of the width */
-  max-width: 1400px; /* Cap it for ultra-wide screens */
+  width: 100%;
+  max-width: 1400px;
   margin-left: auto;
   margin-right: auto;
-  justify-content: center; /* Keep buttons centered */
-  position: relative; /* Context for absolute positioning */
-  padding: 15px 20px; /* Slightly taller */
+  /* justify-content: center; REMOVED (We want right align now) */
+  position: relative;
+  padding: 15px 20px;
 }
 
 /* 2. Position Stats Absolutely to the Left */
@@ -1998,13 +2021,16 @@ select.styled-input {
 /* --- STEP SL MODIFIER STYLES --- */
 .sl-modifier-group {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 2px; /* More space */
-  margin-right: 8px;
-  background: rgba(0, 0, 0, 0.2);
-  padding: 2px 6px; /* Larger padding */
-  border-radius: 4px;
+  align-items: center; /* Vertically center */
+  gap: 8px; /* Space between arrows and input */
+  
+  background: rgba(0, 0, 0, 0.4); /* Darker background */
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  
+  /* Ensure it fits in the label */
+  pointer-events: auto;
 }
 
 .arrow-btn {
@@ -2033,19 +2059,20 @@ select.styled-input {
 }
 
 .step-input {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
   color: white;
   font-family: "Inter", monospace;
-  font-size: 13px; /* Bigger Text */
+  font-size: 14px;
   font-weight: 700;
-  width: 55px; /* Wider Box */
-  height: 26px; /* Taller Box */
-  padding: 0 6px;
-  border-radius: 4px;
+  width: 70px; /* Slightly wider */
+  height: 24px;
   text-align: center;
   outline: none;
   transition: border-color 0.2s;
+  padding: 0;
+  border-radius: 0;
 }
 
 .step-input:focus {
@@ -2239,3 +2266,50 @@ select.styled-input {
     align-items: center;
 }
 .remove-x:hover { color: #ff5555; }
+
+/* --- NEW: Realtime Price Label (Stacked) --- */
+.realtime-price-tag {
+  position: absolute;
+  right: 0; /* Align to the right edge of the chart area (near price scale) */
+  /* If you want it following the line strictly: 'left: 0; width: 100%' or handle in JS. 
+     Usually right alignment looks best for price labels. */
+  transform: translateY(-50%); /* Center vertically on the price line */
+  z-index: 45; /* Below context menus (100) but above grid */
+  
+  display: flex;
+  flex-direction: column; /* STACK THEM */
+  align-items: center;
+  justify-content: center;
+  
+  padding: 4px 8px;
+  border-radius: 4px 0 0 4px; /* Rounded on left side */
+  color: white;
+  pointer-events: none; /* Let clicks pass through to chart */
+  
+  transition: top 0.1s linear, background-color 0.2s;
+}
+
+.rt-price {
+  font-family: "Inter", monospace;
+  font-weight: 800;
+  font-size: 16px; /* BIGGER PRICE */
+  line-height: 1.1;
+}
+
+.rt-timer {
+  font-family: "Inter", monospace;
+  font-weight: 600;
+  font-size: 12px; /* READABLE TIMER */
+  opacity: 0.9;
+  line-height: 1.1;
+  margin-top: 2px;
+}
+
+/* --- UPDATED: Arrow Buttons (Using +/- now) --- */
+.arrow-btn {
+  font-family: "Inter", sans-serif; /* Standard font for +/- symbols */
+  font-weight: 800;
+  font-size: 18px; /* Larger click target */
+  line-height: 1;
+  padding-bottom: 2px; /* Visual optical alignment */
+}
